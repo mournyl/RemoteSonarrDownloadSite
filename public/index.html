@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mournyl</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=UnifrakturMaguntia&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="top">
+    <h1 class="logo">mournyl</h1>
+    <div class="controls">
+      <div class="toggle">
+        <button data-type="movie" class="active">Movies</button>
+        <button data-type="tv">TV Shows</button>
+      </div>
+      <input id="search" type="search" placeholder="Search movies…" autocomplete="off">
+    </div>
+    <nav id="lists"></nav>
+  </header>
+
+  <main>
+    <div id="grid" class="grid"></div>
+    <div id="sentinel"></div>
+    <p id="status"></p>
+  </main>
+
+  <dialog id="detail">
+    <button class="close" aria-label="Close">&times;</button>
+    <div id="detailBody"></div>
+  </dialog>
+
+  <footer>Data from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</footer>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
