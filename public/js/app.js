@@ -1,6 +1,6 @@
 // When you open index.html by double-clicking (file://), API calls go to your live site.
 // Put your deployed URL here, e.g. "https://yourdomain.com". On the live site it's ignored.
-const LIVE_SITE = "https://yourdomain.com";
+const LIVE_SITE = "https://mournyl.com";
 const API_BASE = location.protocol === "file:" ? LIVE_SITE : "";
 
 // TESTING ONLY: with a token here, the page calls TMDB directly (no Worker needed).
