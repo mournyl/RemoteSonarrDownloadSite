@@ -5,8 +5,6 @@ const API_BASE = location.protocol === "file:" ? LIVE_SITE : "";
 
 // TESTING ONLY: with a token here, the page calls TMDB directly (no Worker needed).
 // Set it back to "" before committing, or your key goes public on GitHub.
-const TEST_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI2NTA5NzgxZjI1YmE4Zjk0YjJiMjUzYTQwM2NlMWE1NCIsIm5iZiI6MTc5MDIwODg4NC4wMDgsInN1YiI6IjZhYjQ2Yjc0MTFiMDVmYThjNzNmODNkZCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.12XM1Ba4Lcj8OcrwmgYv6NoBsdDNAP1ytjw6lPgCixA"; // DELETE BEFORE COMMITTING
-
 const IMG = "https://image.tmdb.org/t/p/";
 const LISTS = {
   movie: [
@@ -41,12 +39,10 @@ const fmtDate = (iso) => {
 const esc = (s = "") => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 async function api(path, params = {}) {
-  const qs = new URLSearchParams({ language: "en-US", ...params });
-  const res = TEST_TOKEN
-    ? await fetch(`https://api.themoviedb.org/3/${path}?${qs}`, { headers: { Authorization: `Bearer ${TEST_TOKEN}` } })
-    : await fetch(`${API_BASE}/api/${path}?${qs}`);
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-  return res.json();
+     const qs = new URLSearchParams({ language: "en-US", ...params });
+     const res = await fetch(`${API_BASE}/api/${path}?${qs}`);
+     if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+     return res.json();
 }
 
 // ---------- Wall ----------
