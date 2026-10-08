@@ -190,6 +190,10 @@ async function loadMore() {
       data = await api(state.list, { page: state.page, region: "US" });
     }
     if (gen !== state.gen) return;
+    // Hide titles with no poster or no release date (everywhere except My Server)
+    if (state.type !== "server") {
+      data.results = data.results.filter((r) => r.poster_path && (r.release_date || r.first_air_date));
+    }
     state.totalPages = Math.min(data.total_pages || 1, 500);
     state.page++;
     for (const item of data.results) {
