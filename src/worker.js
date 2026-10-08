@@ -5,7 +5,7 @@
 //   /api/library                                        your Sonarr shows (needs SONARR_URL + SONARR_API_KEY)
 //   /api/movies                                         your Radarr movies (needs RADARR_URL + RADARR_API_KEY)
 //   /api/server                                         what's connected (no secrets)
-//   /api/request   POST {type, tmdbId, monitor}         add to Sonarr/Radarr in 720p (logged in only)
+//   /api/request   POST {type, tmdbId, monitor}         add to Sonarr (720p) / Radarr (1080p) (logged in only)
 //   /api/login     POST {password}  /api/logout POST    simple one-password login (LOGIN_PASSWORD secret)
 const TMDB = "https://api.themoviedb.org/3";
 const GRACENOTE = "https://data.tmsapi.com/v1.1";
@@ -367,8 +367,8 @@ async function library(request, env, ctx, cors) {
 
 // ---------- Add to My Server (Sonarr for TV, Radarr for movies) ----------
 // Adding only works when you're logged in, so nobody else can add downloads through the site.
-// Uses the "HD-720p" quality profile (720p only, never upgrades past 720p) unless
-// SONARR_PROFILE / RADARR_PROFILE say otherwise.
+// TV uses Sonarr's "HD-720p" profile and movies use Radarr's "HD-1080p" profile,
+// unless SONARR_PROFILE / RADARR_PROFILE say otherwise.
 
 const MONITOR_OPTIONS = new Set(["all", "lastSeason", "firstSeason", "future"]);
 
@@ -491,7 +491,7 @@ async function addMovie(env, tmdbId) {
   if (!movie || !movie.tmdbId) throw httpErr(404, "Radarr couldn't find this movie");
   if (movie.id) return { status: "exists", title: movie.title, message: "Already on your server." };
 
-  const profile = pickProfile(profiles, env.RADARR_PROFILE || "HD-720p", "Radarr");
+  const profile = pickProfile(profiles, env.RADARR_PROFILE || "HD-1080p", "Radarr");
   const rootFolderPath = pickRoot(roots, env.RADARR_ROOT, "Radarr");
   const added = await R("/movie", {
     method: "POST",

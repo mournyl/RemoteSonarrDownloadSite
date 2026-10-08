@@ -3,7 +3,7 @@
 //   - the "My Server" section (LISTS.server): your Sonarr shows and Radarr movies
 //   - a badge on any TV, anime or movie card that's on your server
 //   - library info at the top of a show's or movie's detail popup
-//   - an "Add to My Server" button for shows/movies you don't have yet (720p)
+//   - an "Add to My Server" button for shows (720p) and movies (1080p) you don't have yet
 
 const library = { byTmdb: new Map(), byTitle: new Map(), shows: [], error: "", loaded: false, pending: [] };
 const movieLib = { byTmdb: new Map(), movies: [], error: "" };
@@ -130,7 +130,6 @@ async function libraryPage(page, list = "library", query = "") {
   if (library.error) throw new Error(library.error);
   let shows = library.shows;
   if (list === "library/anime") shows = shows.filter(isAnimeShow);
-  if (list === "library/missing") shows = shows.filter((s) => s.monitored && s.have < s.aired);
   if (q) shows = shows.filter((s) => libKey(s.title, "").includes(q));
   return {
     total_pages: Math.max(1, Math.ceil(shows.length / LIBRARY_PAGE)),
@@ -205,7 +204,7 @@ function showAddButton(type, d, token) {
   box.className = "lib-detail";
   box.innerHTML = `
     <div class="lib-detail-head"><span class="lib-dot off"></span>Not on your server</div>
-    <div class="lib-detail-meta">Adds it to ${app} and starts downloading in 720p.</div>
+    <div class="lib-detail-meta">Adds it to ${app} and starts downloading in ${type === "tv" ? "720p" : "1080p"}.</div>
     <form class="lib-add">
       ${type === "tv" ? `<select class="lib-monitor" aria-label="Which episodes">
         <option value="all">All seasons</option>

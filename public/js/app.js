@@ -9,20 +9,14 @@ const LISTS = {
     ["trending/movie/week", "Trending"],
     ["movie/now_playing", "In Theaters"],
     ["movie/upcoming", "Coming Soon"],
-    ["movie/popular", "Popular"],
-    ["movie/top_rated", "Top Rated"],
   ],
   tv: [
     ["trending/tv/week", "Trending"],
     ["tv/on_the_air", "On the Air"],
     ["tv/airing_today", "Airing Today"],
-    ["tv/popular", "Popular"],
-    ["tv/top_rated", "Top Rated"],
   ],
   anime: [
-    ["anime/popular", "Popular"],
     ["anime/airing", "Airing This Week"],
-    ["anime/top", "Top Rated"],
     ["anime/new", "New"],
     ["anime/movies", "Movies"],
   ],
@@ -30,7 +24,6 @@ const LISTS = {
     ["library", "TV Shows"],
     ["library/movies", "Movies"],
     ["library/anime", "Anime"],
-    ["library/missing", "Missing Episodes"],
   ],
 };
 
@@ -44,9 +37,7 @@ const FIRST_RUN = { region: "US", with_release_type: "2|3", sort_by: "popularity
 const LIST_QUERIES = {
   "movie/now_playing": () => ({ path: "discover/movie", type: "movie", params: { ...FIRST_RUN, "release_date.gte": isoDay(-42), "release_date.lte": isoDay(0), "primary_release_date.gte": isoDay(-365) } }),
   "movie/upcoming": () => ({ path: "discover/movie", type: "movie", params: { ...FIRST_RUN, "release_date.gte": isoDay(1), "release_date.lte": isoDay(180), "primary_release_date.gte": isoDay(-365) } }),
-  "anime/popular": () => ({ path: "discover/tv", type: "tv", sfw: true, params: { ...ANIME, sort_by: "popularity.desc" } }),
   "anime/airing": () => ({ path: "discover/tv", type: "tv", sfw: true, params: { ...ANIME, sort_by: "popularity.desc", "air_date.gte": isoDay(0), "air_date.lte": isoDay(7) } }),
-  "anime/top": () => ({ path: "discover/tv", type: "tv", sfw: true, params: { ...ANIME, sort_by: "vote_average.desc", "vote_count.gte": "300" } }),
   "anime/new": () => ({ path: "discover/tv", type: "tv", sfw: true, params: { ...ANIME, sort_by: "first_air_date.desc", "first_air_date.lte": isoDay(0), "vote_count.gte": "5" } }),
   "anime/movies": () => ({ path: "discover/movie", type: "movie", sfw: true, params: { ...ANIME, sort_by: "popularity.desc" } }),
 };
