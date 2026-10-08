@@ -4,7 +4,8 @@
 //   /api/theaters?zip=12345&radius=10                   nearby theaters only (OpenStreetMap, no key)
 //   /api/library                                        your Sonarr shows (needs SONARR_URL + SONARR_API_KEY)
 //   /api/server                                         what's connected (no secrets)
-//   /api/request   POST {type, tmdbId, monitor}         add to Sonarr/Radarr in 720p (local copy only, until login exists)
+//   /api/request   POST {type, tmdbId, monitor}         add to Sonarr/Radarr in 720p (logged in only)
+//   /api/login     POST {password}  /api/logout POST    simple one-password login (LOGIN_PASSWORD secret)
 const TMDB = "https://api.themoviedb.org/3";
 const GRACENOTE = "https://data.tmsapi.com/v1.1";
 const ALLOWED = /^\/(movie|tv|trending|search|discover)\//;
@@ -19,8 +20,10 @@ export default {
         return new Response(null, { headers: { ...cors, "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "content-type" } });
       }
       if (url.pathname === "/api/request") return requestMedia(request, env, ctx, cors);
+      if (url.pathname === "/api/login") return login(request, env);
+      if (url.pathname === "/api/logout") return logout(request);
       if (request.method !== "GET") return new Response("Method not allowed", { status: 405, headers: cors });
-      if (url.pathname === "/api/server") return json(serverInfo(env, url), 200, cors);
+      if (url.pathname === "/api/server") return json(await serverInfo(request, env), 200, cors);
 
       if (url.pathname === "/api/showtimes") return showtimes(url, env, cors);
       if (url.pathname === "/api/theaters") return theaters(url, cors);
@@ -350,20 +353,21 @@ async function library(request, env, ctx, cors) {
 }
 
 // ---------- Add to My Server (Sonarr for TV, Radarr for movies) ----------
-// For now adding only works on your local copy (npx wrangler dev at localhost), so nobody can
-// add downloads through the public site. Replace isLocal() with a real login check later.
+// Adding only works when you're logged in, so nobody else can add downloads through the site.
 // Uses the "HD-720p" quality profile (720p only, never upgrades past 720p) unless
 // SONARR_PROFILE / RADARR_PROFILE say otherwise.
 
 const MONITOR_OPTIONS = new Set(["all", "lastSeason", "firstSeason", "future"]);
 
-const isLocal = (url) => ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
 
-function serverInfo(env, url) {
+async function serverInfo(request, env) {
+  const loggedIn = await isLoggedIn(request, env);
   return {
     tv: Boolean(env.SONARR_URL && env.SONARR_API_KEY),
     movie: Boolean(env.RADARR_URL && env.RADARR_API_KEY),
-    add: isLocal(url),
+    add: loggedIn,
+    login: Boolean(env.LOGIN_PASSWORD),
+    loggedIn,
   };
 }
 
@@ -492,7 +496,7 @@ async function addMovie(env, tmdbId) {
 
 async function requestMedia(request, env, ctx, cors) {
   if (request.method !== "POST") return json({ error: "Use POST" }, 405, cors);
-  if (!isLocal(new URL(request.url))) return json({ error: "Adding only works on your local copy for now" }, 403, cors);
+  if (!(await isLoggedIn(request, env))) return json({ error: "Log in to add things to your server" }, 403, cors);
 
   let body;
   try { body = await request.json(); } catch { return json({ error: "Bad request" }, 400, cors); }
@@ -512,4 +516,66 @@ async function requestMedia(request, env, ctx, cors) {
   } catch (e) {
     return json({ error: e.message || "Something went wrong" }, e.status || 502, cors);
   }
+}
+
+// ---------- Simple login ----------
+// One password (LOGIN_PASSWORD secret). Logging in sets a signed, HttpOnly cookie for 30 days.
+// Changing LOGIN_PASSWORD logs out every device.
+
+const SESSION_COOKIE = "mournyl_session";
+const SESSION_DAYS = 30;
+const textEnc = new TextEncoder();
+
+function sameText(given, expected) {
+  const a = String(given || ""), b = String(expected || "");
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  return diff === 0 && b.length > 0;
+}
+
+async function sign(env, data) {
+  const key = await crypto.subtle.importKey("raw", textEnc.encode("mournyl-session:" + env.LOGIN_PASSWORD),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, textEnc.encode(data)));
+  return btoa(String.fromCharCode(...sig)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function readCookie(request, name) {
+  for (const part of (request.headers.get("cookie") || "").split(";")) {
+    const [k, ...v] = part.trim().split("=");
+    if (k === name) return v.join("=");
+  }
+  return "";
+}
+
+async function isLoggedIn(request, env) {
+  if (!env.LOGIN_PASSWORD) return false;
+  const [expires, sig] = readCookie(request, SESSION_COOKIE).split(".");
+  if (!expires || !sig || !(Number(expires) > Date.now())) return false;
+  return sameText(sig, await sign(env, expires));
+}
+
+const sessionResponse = (body, status, cookie) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json", "cache-control": "no-store", ...(cookie ? { "set-cookie": cookie } : {}) },
+  });
+
+async function login(request, env) {
+  if (request.method !== "POST") return sessionResponse({ error: "Use POST" }, 405);
+  if (!env.LOGIN_PASSWORD) return sessionResponse({ error: "Login isn't set up (LOGIN_PASSWORD missing)" }, 501);
+  let body;
+  try { body = await request.json(); } catch { return sessionResponse({ error: "Bad request" }, 400); }
+  if (!sameText(body && body.password, env.LOGIN_PASSWORD)) {
+    await new Promise((r) => setTimeout(r, 1000)); // slow down password guessing
+    return sessionResponse({ error: "Wrong password" }, 401);
+  }
+  const expires = String(Date.now() + SESSION_DAYS * 86400000);
+  const cookie = `${SESSION_COOKIE}=${expires}.${await sign(env, expires)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_DAYS * 86400}`;
+  return sessionResponse({ ok: true }, 200, cookie);
+}
+
+function logout(request) {
+  if (request.method !== "POST") return sessionResponse({ error: "Use POST" }, 405);
+  return sessionResponse({ ok: true }, 200, `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`);
 }
