@@ -105,43 +105,60 @@ function libraryBadge(el, item) {
 // Called from loadMore() in app.js for the "My Server" section
 const LIBRARY_PAGE = 40;
 const isAnimeShow = (s) => s.seriesType === "anime" || (s.genres || []).some((g) => /^anime$/i.test(g));
+const movieCard = (m) => ({
+  id: m.tmdbId,                           // Radarr always has the TMDB id
+  title: m.title,
+  poster_path: m.poster || null,          // full URL from Radarr
+  release_date: m.released || (m.year ? `${m.year}-01-01` : ""),
+  __type: "movie",
+  __movie: m,
+});
+const showCard = (s) => ({
+  id: s.tmdbId || -s.tvdbId,              // negative = no TMDB match
+  name: s.title,
+  poster_path: s.poster || null,          // full URL from Sonarr
+  first_air_date: s.firstAired || (s.year ? `${s.year}-01-01` : ""),
+  __type: "tv",
+  __library: s,
+});
+
 async function libraryPage(page, list = "library", query = "") {
   await libraryReady;
   const q = libKey(query, "").replace(/\|$/, "");
-  const start = (page - 1) * LIBRARY_PAGE;
+  const match = (x) => !q || libKey(x.title, "").includes(q);
+  let items;
 
-  if (list === "library/movies") {
+  if (list === "library/all") {
+    // TV shows first, then movies, each under its own heading
+    if (library.error && movieLib.error) throw new Error(library.error);
+    const shows = library.error ? [] : library.shows.filter(match);
+    const movies = movieLib.error ? [] : movieLib.movies.filter(match);
+    items = [];
+    if (shows.length || library.error) items.push({ __heading: "TV Shows", count: shows.length, error: library.error }, ...shows.map(showCard));
+    if (movies.length || movieLib.error) items.push({ __heading: "Movies", count: movies.length, error: movieLib.error }, ...movies.map(movieCard));
+  } else if (list === "library/movies") {
     if (movieLib.error) throw new Error(movieLib.error);
-    let movies = movieLib.movies;
-    if (q) movies = movies.filter((m) => libKey(m.title, "").includes(q));
-    return {
-      total_pages: Math.max(1, Math.ceil(movies.length / LIBRARY_PAGE)),
-      results: movies.slice(start, start + LIBRARY_PAGE).map((m) => ({
-        id: m.tmdbId,                           // Radarr always has the TMDB id
-        title: m.title,
-        poster_path: m.poster || null,          // full URL from Radarr
-        release_date: m.released || (m.year ? `${m.year}-01-01` : ""),
-        __type: "movie",
-        __movie: m,
-      })),
-    };
+    items = movieLib.movies.filter(match).map(movieCard);
+  } else {
+    if (library.error) throw new Error(library.error);
+    let shows = library.shows;
+    if (list === "library/anime") shows = shows.filter(isAnimeShow);
+    items = shows.filter(match).map(showCard);
   }
 
-  if (library.error) throw new Error(library.error);
-  let shows = library.shows;
-  if (list === "library/anime") shows = shows.filter(isAnimeShow);
-  if (q) shows = shows.filter((s) => libKey(s.title, "").includes(q));
+  const start = (page - 1) * LIBRARY_PAGE;
   return {
-    total_pages: Math.max(1, Math.ceil(shows.length / LIBRARY_PAGE)),
-    results: shows.slice(start, start + LIBRARY_PAGE).map((s) => ({
-      id: s.tmdbId || -s.tvdbId,              // negative = no TMDB match
-      name: s.title,
-      poster_path: s.poster || null,          // full URL from Sonarr
-      first_air_date: s.firstAired || (s.year ? `${s.year}-01-01` : ""),
-      __type: "tv",
-      __library: s,
-    })),
+    total_pages: Math.max(1, Math.ceil(items.length / LIBRARY_PAGE)),
+    results: items.slice(start, start + LIBRARY_PAGE),
   };
+}
+
+// Section heading inside the grid (used by the "All" tab)
+function libraryHeading(item) {
+  const h = document.createElement("h2");
+  h.className = "lib-section";
+  h.innerHTML = `${esc(item.__heading)} <span>${item.error ? esc(item.error) : item.count}</span>`;
+  return h;
 }
 
 // Called from openDetail() in app.js after the popup renders

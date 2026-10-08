@@ -21,6 +21,7 @@ const LISTS = {
     ["anime/movies", "Movies"],
   ],
   server: [
+    ["library/all", "All"],
     ["library", "TV Shows"],
     ["library/movies", "Movies"],
     ["library/anime", "Anime"],
@@ -164,7 +165,7 @@ async function loadMore() {
   try {
     let data;
     if (state.type === "server") {
-      // Everything from Sonarr (library.js); search filters your library by title
+      // Everything from Sonarr/Radarr (library.js); search filters your library by title
       data = await libraryPage(state.page, state.list, state.query);
     } else if (state.query) {
       const t = state.type === "anime" ? "tv" : state.type;
@@ -188,8 +189,10 @@ async function loadMore() {
     state.totalPages = Math.min(data.total_pages || 1, 500);
     state.page++;
     for (const item of data.results) {
-      if (state.seen.has(item.id)) continue;
-      state.seen.add(item.id);
+      if (item.__heading) { grid.append(libraryHeading(item)); continue; }
+      const key = `${item.__type || state.type}:${item.id}`; // a show and a movie can share an id
+      if (state.seen.has(key)) continue;
+      state.seen.add(key);
       grid.append(card(item));
     }
     statusEl.textContent = grid.children.length ? "" : "Nothing found.";
