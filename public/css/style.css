@@ -150,3 +150,65 @@ footer { text-align: center; color: var(--faint); font-size: 11px; padding: 24px
   .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px 12px; }
   #search { width: 100%; }
 }
+.theaters { margin: 0 0 var(--gap, 16px); padding: 16px; background: var(--raise); border-radius: var(--radius, 10px); }
+.theaters[hidden] { display: none; }
+.theaters h2 { margin: 0 0 10px; font-size: 1rem; font-weight: 600; color: var(--text); }
+.zip-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.zip-form input, .zip-form select, .zip-form button {
+  font: inherit; color: var(--text); background: var(--chip); border: 0; border-radius: 8px; padding: 8px 12px;
+}
+.zip-form input { width: 10ch; }
+.zip-form button { cursor: pointer; font-weight: 600; }
+.zip-form button:hover { filter: brightness(1.2); }
+.th-note { margin: 12px 0 0; color: var(--muted); font-size: .9rem; }
+.theater-list ul { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.theater-list li { background: var(--chip); border-radius: 8px; padding: 10px 12px; }
+.th-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.th-name { font-weight: 600; color: var(--text); }
+.th-dist { color: var(--muted); font-size: .85rem; white-space: nowrap; }
+.th-addr { color: var(--muted); font-size: .85rem; margin-top: 2px; }
+.th-links { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: .85rem; }
+.th-links a { color: var(--text); opacity: .75; text-decoration: none; }
+.th-links a:hover { opacity: 1; text-decoration: underline; }
+
+/* ---------- Your Sonarr library ---------- */
+.card .poster { position: relative; }
+.lib-badge {
+  position: absolute; top: 6px; left: 6px; z-index: 1;
+  font-size: 10px; font-weight: 600; line-height: 1; letter-spacing: .02em;
+  padding: 4px 6px; border-radius: 3px;
+  color: #fff; background: rgba(0, 0, 0, .72); backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+.lib-badge.full { background: rgba(38, 110, 64, .92); }
+.lib-badge.partial { background: rgba(150, 105, 25, .92); }
+.lib-badge.none { background: rgba(60, 60, 60, .92); }
+
+.lib-detail { margin: 6px 36px 4px; padding: 12px 14px; background: var(--chip); border-radius: var(--radius); }
+.lib-detail-head { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--text); }
+.lib-dot { width: 7px; height: 7px; border-radius: 50%; background: #3fae6a; }
+.lib-detail-meta { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.lib-bar { margin-top: 10px; height: 3px; border-radius: 2px; background: var(--raise); overflow: hidden; }
+.lib-bar span { display: block; height: 100%; background: #3fae6a; }
+@media (max-width: 700px) { .lib-detail { margin: 6px 20px 4px; } }
+
+/* ---------- Add to My Server ---------- */
+.lib-dot.off { background: var(--faint); }
+.lib-add { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.lib-add[hidden] { display: none; }
+.lib-add select, .lib-add input {
+  padding: 8px 10px; border: 0; border-radius: 4px; outline: none;
+  background: var(--raise); color: var(--text); font-size: 13px;
+}
+.lib-add input { width: 170px; }
+.lib-add input::placeholder { color: var(--faint); }
+.lib-add-btn {
+  padding: 8px 16px; border: 0; border-radius: 4px; cursor: pointer;
+  background: var(--text); color: #111; font-size: 13px; font-weight: 600;
+}
+.lib-add-btn:disabled { opacity: .6; cursor: default; }
+.lib-msg { margin-top: 8px; font-size: 12px; color: var(--muted); }
+.lib-msg:empty { display: none; }
+.lib-msg.ok { color: #6fcf8f; }
+.lib-msg.err { color: #e07a7a; }

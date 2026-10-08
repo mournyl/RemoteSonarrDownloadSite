@@ -16,6 +16,8 @@
       <div class="toggle">
         <button data-type="movie" class="active">Movies</button>
         <button data-type="tv">TV Shows</button>
+        <button data-type="anime">Anime</button>
+        <button data-type="server">My Server</button>
       </div>
       <input id="search" type="search" placeholder="Search movies…" autocomplete="off">
     </div>
@@ -23,6 +25,19 @@
   </header>
 
   <main>
+      <section id="theaters" class="theaters" hidden>
+      <h2>Theaters near you</h2>
+      <form id="zipForm" class="zip-form">
+        <input id="zip" inputmode="numeric" maxlength="5" placeholder="ZIP code" autocomplete="postal-code" aria-label="ZIP code">
+        <select id="radius" aria-label="Distance">
+          <option value="5">5 mi</option>
+          <option value="10" selected>10 mi</option>
+          <option value="25">25 mi</option>
+        </select>
+        <button type="submit">Find theaters</button>
+      </form>
+      <div id="theaterList" class="theater-list"></div>
+    </section>
     <div id="grid" class="grid"></div>
     <div id="sentinel"></div>
     <p id="status"></p>
@@ -33,8 +48,7 @@
     <div id="detailBody"></div>
   </dialog>
 
-  <footer>Data from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</footer>
-
   <script src="js/app.js"></script>
+  <script src="js/library.js"></script>
 </body>
 </html>

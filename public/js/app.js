@@ -3,8 +3,6 @@
 const LIVE_SITE = "https://mournyl.com";
 const API_BASE = location.protocol === "file:" ? LIVE_SITE : "";
 
-// TESTING ONLY: with a token here, the page calls TMDB directly (no Worker needed).
-// Set it back to "" before committing, or your key goes public on GitHub.
 const IMG = "https://image.tmdb.org/t/p/";
 const LISTS = {
   movie: [
@@ -21,7 +19,53 @@ const LISTS = {
     ["tv/popular", "Popular"],
     ["tv/top_rated", "Top Rated"],
   ],
+  anime: [
+    ["anime/popular", "Popular"],
+    ["anime/airing", "Airing This Week"],
+    ["anime/top", "Top Rated"],
+    ["anime/new", "New"],
+    ["anime/movies", "Movies"],
+  ],
+  server: [
+    ["library", "All Shows"],
+    ["library/anime", "Anime"],
+    ["library/missing", "Missing Episodes"],
+  ],
 };
+
+// Anime lists use TMDB's discover search: Animation genre + Japanese original language
+const ANIME = { with_genres: "16", with_original_language: "ja" };
+const isoDay = (offset = 0) => { const d = new Date(); d.setDate(d.getDate() + offset); return d.toISOString().slice(0, 10); };
+// In Theaters / Coming Soon: only real first-run US theatrical releases.
+// primary_release_date (the movie's first release anywhere) within the last year
+// keeps out re-releases of old movies that TMDB's own lists include.
+const FIRST_RUN = { region: "US", with_release_type: "2|3", sort_by: "popularity.desc" };
+const LIST_QUERIES = {
+  "movie/now_playing": () => ({ path: "discover/movie", type: "movie", params: { ...FIRST_RUN, "release_date.gte": isoDay(-42), "release_date.lte": isoDay(0), "primary_release_date.gte": isoDay(-365) } }),
+  "movie/upcoming": () => ({ path: "discover/movie", type: "movie", params: { ...FIRST_RUN, "release_date.gte": isoDay(1), "release_date.lte": isoDay(180), "primary_release_date.gte": isoDay(-365) } }),
+  "anime/popular": () => ({ path: "discover/tv", type: "tv", sfw: true, params: { ...ANIME, sort_by: "popularity.desc" } }),
+  "anime/airing": () => ({ path: "discover/tv", type: "tv", sfw: true, params: { ...ANIME, sort_by: "popularity.desc", "air_date.gte": isoDay(0), "air_date.lte": isoDay(7) } }),
+  "anime/top": () => ({ path: "discover/tv", type: "tv", sfw: true, params: { ...ANIME, sort_by: "vote_average.desc", "vote_count.gte": "300" } }),
+  "anime/new": () => ({ path: "discover/tv", type: "tv", sfw: true, params: { ...ANIME, sort_by: "first_air_date.desc", "first_air_date.lte": isoDay(0), "vote_count.gte": "5" } }),
+  "anime/movies": () => ({ path: "discover/movie", type: "movie", sfw: true, params: { ...ANIME, sort_by: "popularity.desc" } }),
+};
+
+// NSFW anime filter: TMDB's "hentai" and "ecchi" keywords (ids looked up once), plus adult-flagged titles
+let nsfwKeywords = null;
+async function nsfwKeywordIds() {
+  if (nsfwKeywords) return nsfwKeywords;
+  const ids = new Set(["195669"]); // "ecchi"
+  await Promise.all(["hentai", "ecchi"].map(async (word) => {
+    try {
+      const r = await api("search/keyword", { query: word });
+      for (const k of r.results || []) if (String(k.name).toLowerCase() === word) ids.add(String(k.id));
+    } catch {}
+  }));
+  return (nsfwKeywords = [...ids].join("|"));
+}
+const sfw = (r) => !r.adult;
+const isAnime = (r) => (r.genre_ids || []).includes(16) && (r.original_language === "ja" || (r.origin_country || []).includes("JP"));
+const SEARCH_LABEL = { movie: "movies", tv: "TV shows", anime: "anime", server: "your server" };
 
 const state = { type: "movie", list: LISTS.movie[0][0], query: "", page: 1, totalPages: 1, loading: false, gen: 0, seen: new Set() };
 
@@ -39,11 +83,61 @@ const fmtDate = (iso) => {
 const esc = (s = "") => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 async function api(path, params = {}) {
-     const qs = new URLSearchParams({ language: "en-US", ...params });
-     const res = await fetch(`${API_BASE}/api/${path}?${qs}`);
-     if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-     return res.json();
+  const qs = new URLSearchParams({ language: "en-US", ...params });
+  const res = await fetch(`${API_BASE}/api/${path}?${qs}`);
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
 }
+
+// ---------- Theaters near you (shown on Movies → In Theaters) ----------
+const theaterList = $("#theaterList"), zipInput = $("#zip"), radiusSel = $("#radius");
+
+function updateTheaterBar() {
+  const box = document.getElementById("theaters");
+  if (box) box.hidden = !(state.type === "movie" && state.list === "movie/now_playing" && !state.query);
+}
+
+async function findTheaters(e) {
+  if (e) e.preventDefault();
+  const zip = zipInput.value.trim();
+  if (!/^\d{5}$/.test(zip)) {
+    theaterList.innerHTML = `<p class="th-note">Enter a 5-digit ZIP code.</p>`;
+    return;
+  }
+  try { localStorage.setItem("zip", zip); } catch {}
+  theaterList.innerHTML = `<p class="th-note">Finding theaters near ${esc(zip)}…</p>`;
+  try {
+    const res = await fetch(`${API_BASE}/api/theaters?zip=${zip}&radius=${radiusSel.value}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.status);
+    if (!data.theaters.length) {
+      theaterList.innerHTML = `<p class="th-note">No theaters found within ${data.radius} miles of ${esc(data.place)}.</p>`;
+      return;
+    }
+    theaterList.innerHTML =
+      `<p class="th-note">${data.theaters.length} theater${data.theaters.length === 1 ? "" : "s"} near ${esc(data.place)}</p><ul>` +
+      data.theaters.map((t) => {
+        const addr = [t.street, t.city].filter(Boolean).join(", ");
+        const maps = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr ? `${t.name}, ${addr}` : `${t.lat},${t.lon}`)}`;
+        const times = `https://www.google.com/search?q=${encodeURIComponent(`${t.name} ${t.city} showtimes`)}`;
+        return `<li>
+          <div class="th-head"><span class="th-name">${esc(t.name)}</span><span class="th-dist">${t.miles} mi</span></div>
+          ${addr ? `<div class="th-addr">${esc(addr)}</div>` : ""}
+          <div class="th-links">
+            <a href="${times}" target="_blank" rel="noopener">Showtimes</a>
+            <a href="${maps}" target="_blank" rel="noopener">Directions</a>
+            ${t.website ? `<a href="${esc(t.website)}" target="_blank" rel="noopener">Website</a>` : ""}
+            ${t.phone ? `<a href="tel:${esc(t.phone.replace(/[^\d+]/g, ""))}">${esc(t.phone)}</a>` : ""}
+          </div>
+        </li>`;
+      }).join("") + `</ul>`;
+  } catch (err) {
+    theaterList.innerHTML = `<p class="th-note">Couldn't load theaters: ${esc(err.message)}</p>`;
+  }
+}
+
+$("#zipForm").addEventListener("submit", findTheaters);
+try { zipInput.value = localStorage.getItem("zip") || ""; } catch {}
 
 // ---------- Wall ----------
 function renderLists() {
@@ -65,6 +159,7 @@ function reset() {
   state.seen.clear();
   grid.innerHTML = "";
   renderLists();
+  updateTheaterBar();
   loadMore();
 }
 
@@ -74,9 +169,24 @@ async function loadMore() {
   state.loading = true;
   statusEl.textContent = "Loading…";
   try {
-    const data = state.query
-      ? await api(`search/${state.type}`, { query: state.query, page: state.page })
-      : await api(state.list, { page: state.page, region: "US" });
+    let data;
+    if (state.type === "server") {
+      // Everything from Sonarr (library.js); search filters your library by title
+      data = await libraryPage(state.page, state.list, state.query);
+    } else if (state.query) {
+      const t = state.type === "anime" ? "tv" : state.type;
+      data = await api(`search/${t}`, { query: state.query, page: state.page, include_adult: "false" });
+      data.results.forEach((r) => (r.__type = t));
+      if (state.type === "anime") data.results = data.results.filter((r) => isAnime(r) && sfw(r));
+    } else if (LIST_QUERIES[state.list]) {
+      const q = LIST_QUERIES[state.list]();
+      const extra = q.sfw ? { include_adult: "false", without_keywords: await nsfwKeywordIds() } : {};
+      data = await api(q.path, { ...q.params, ...extra, page: state.page });
+      if (q.sfw) data.results = data.results.filter(sfw);
+      data.results.forEach((r) => (r.__type = q.type));
+    } else {
+      data = await api(state.list, { page: state.page, region: "US" });
+    }
     if (gen !== state.gen) return;
     state.totalPages = Math.min(data.total_pages || 1, 500);
     state.page++;
@@ -105,11 +215,12 @@ function card(item) {
   el.className = "card";
   el.title = title;
   el.innerHTML = `
-    <span class="poster">${item.poster_path ? `<img loading="lazy" src="${IMG}w342${item.poster_path}" alt="">` : `<span class="noimg">${esc(title)}</span>`}</span>
+    <span class="poster">${item.poster_path ? `<img loading="lazy" src="${esc(item.poster_path.startsWith("http") ? item.poster_path : IMG + "w342" + item.poster_path)}" alt="">` : `<span class="noimg">${esc(title)}</span>`}</span>
     <span class="title">${esc(title)}</span>
     <span class="date">${date || "TBA"}</span>
     ${item.vote_average ? `<span class="score">${Math.round(item.vote_average * 10)}%</span>` : ""}`;
-  el.onclick = () => openDetail(state.type, item.id);
+  el.onclick = () => openDetail(item.__type || state.type, item.id);
+  if (typeof libraryBadge === "function") libraryBadge(el, item); // Sonarr badge (library.js)
   return el;
 }
 
@@ -121,6 +232,7 @@ async function openDetail(type, id) {
   try {
     const d = await api(`${type}/${id}`, { append_to_response: "credits,videos,watch/providers,recommendations" });
     body.innerHTML = detailHTML(type, d);
+    if (typeof libraryDetail === "function") libraryDetail(type, d); // Sonarr info (library.js)
     body.scrollTop = 0;
     body.querySelectorAll(".rec").forEach((b) => (b.onclick = () => openDetail(type, b.dataset.id)));
   } catch (e) {
@@ -195,7 +307,7 @@ document.querySelectorAll(".toggle button").forEach((b) => {
     state.type = b.dataset.type;
     state.list = LISTS[state.type][0][0];
     document.querySelectorAll(".toggle button").forEach((x) => x.classList.toggle("active", x === b));
-    search.placeholder = `Search ${state.type === "movie" ? "movies" : "TV shows"}…`;
+    search.placeholder = `Search ${SEARCH_LABEL[state.type]}…`;
     reset();
   };
 });
