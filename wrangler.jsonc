@@ -2,8 +2,12 @@
   "name": "remotesonarrdownloadsite",
   "main": "src/worker.js",
   "compatibility_date": "2026-09-21",
+  // Keep variables added in the Cloudflare dashboard when deploying from GitHub
+  "keep_vars": true,
   "assets": {
     "directory": "./public",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    // Run the Worker (login check) before serving any page file
+    "run_worker_first": true
   }
 }

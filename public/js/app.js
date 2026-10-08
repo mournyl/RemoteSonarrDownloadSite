@@ -85,6 +85,7 @@ const esc = (s = "") => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<
 async function api(path, params = {}) {
   const qs = new URLSearchParams({ language: "en-US", ...params });
   const res = await fetch(`${API_BASE}/api/${path}?${qs}`);
+  if (res.status === 401) { location.replace("/login"); throw new Error("Logged out"); }
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return res.json();
 }

@@ -221,17 +221,4 @@ footer { text-align: center; color: var(--faint); font-size: 11px; padding: 24px
   color: var(--faint); font-size: 12px; font-weight: 500; transition: color .15s;
 }
 .login-btn:hover { color: var(--text); }
-#loginDlg { width: min(340px, calc(100% - 32px)); max-height: none; overflow: visible; }
-#loginForm { display: flex; flex-direction: column; gap: 12px; padding: 24px; }
-#loginForm h3 { font-size: 15px; font-weight: 600; }
-#loginForm input {
-  padding: 10px 12px; border: 0; border-radius: 4px; outline: none;
-  background: var(--chip); color: var(--text); font-size: 13px;
-}
-.login-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.login-actions button { padding: 8px 14px; border: 0; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600; }
-.login-actions button[type=submit] { background: var(--text); color: #111; }
-.login-actions button[type=button] { background: none; color: var(--muted); }
-.login-actions button:disabled { opacity: .6; }
-#loginMsg { min-height: 1em; font-size: 12px; color: #e07a7a; }
 @media (max-width: 600px) { .login-btn { top: 8px; right: 12px; } }

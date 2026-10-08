@@ -14,14 +14,25 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    // ---- Login first: nothing else is served until you're logged in ----
+    if (url.pathname === "/login") return loginPage();
+    if (url.pathname === "/api/login") return login(request, env);
+    if (url.pathname === "/api/logout") return logout(request);
+    if (!(await isLoggedIn(request, env))) {
+      if (url.pathname.startsWith("/api/")) {
+        return new Response(JSON.stringify({ error: "Not logged in", loginRequired: true }), {
+          status: 401, headers: { "content-type": "application/json", "cache-control": "no-store" },
+        });
+      }
+      return Response.redirect(new URL("/login", url).toString(), 302);
+    }
+
     if (url.pathname.startsWith("/api/")) {
       const cors = { "Access-Control-Allow-Origin": "*" };
       if (request.method === "OPTIONS") {
         return new Response(null, { headers: { ...cors, "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "content-type" } });
       }
       if (url.pathname === "/api/request") return requestMedia(request, env, ctx, cors);
-      if (url.pathname === "/api/login") return login(request, env);
-      if (url.pathname === "/api/logout") return logout(request);
       if (request.method !== "GET") return new Response("Method not allowed", { status: 405, headers: cors });
       if (url.pathname === "/api/server") return json(await serverInfo(request, env), 200, cors);
 
@@ -518,12 +529,14 @@ async function requestMedia(request, env, ctx, cors) {
   }
 }
 
-// ---------- Simple login ----------
-// One password (LOGIN_PASSWORD secret). Logging in sets a signed, HttpOnly cookie for 30 days.
-// Changing LOGIN_PASSWORD logs out every device.
+// ---------- Login ----------
+// The whole site is behind one password (LOGIN_PASSWORD secret). Logging in sets a signed,
+// HttpOnly session cookie: it's gone when the browser closes, and it stops working after
+// SESSION_HOURS even if the browser restores it. Changing LOGIN_PASSWORD logs out every device.
+// wrangler.jsonc needs "run_worker_first": true so page files go through this check too.
 
 const SESSION_COOKIE = "mournyl_session";
-const SESSION_DAYS = 30;
+const SESSION_HOURS = 4;
 const textEnc = new TextEncoder();
 
 function sameText(given, expected) {
@@ -570,12 +583,84 @@ async function login(request, env) {
     await new Promise((r) => setTimeout(r, 1000)); // slow down password guessing
     return sessionResponse({ error: "Wrong password" }, 401);
   }
-  const expires = String(Date.now() + SESSION_DAYS * 86400000);
-  const cookie = `${SESSION_COOKIE}=${expires}.${await sign(env, expires)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_DAYS * 86400}`;
+  const expires = String(Date.now() + SESSION_HOURS * 3600000);
+  // No Max-Age/Expires: a session cookie, deleted when the browser closes
+  const cookie = `${SESSION_COOKIE}=${expires}.${await sign(env, expires)}; Path=/; HttpOnly; Secure; SameSite=Strict`;
   return sessionResponse({ ok: true }, 200, cookie);
 }
 
 function logout(request) {
   if (request.method !== "POST") return sessionResponse({ error: "Use POST" }, 405);
   return sessionResponse({ ok: true }, 200, `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`);
+}
+
+function loginPage() {
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>mournyl</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=UnifrakturMaguntia&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px;
+      background: #121212; color: #e8e8e8; font: 14px/1.4 "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    main { width: 100%; max-width: 320px; text-align: center; }
+    h1 {
+      font-family: "UnifrakturMaguntia", "Old English Text MT", serif; font-weight: 400;
+      font-size: clamp(56px, 16vw, 96px); line-height: 1; color: #f2f2f2;
+      text-shadow: 0 0 40px rgba(255, 255, 255, .08); margin-bottom: 32px;
+    }
+    form { display: flex; flex-direction: column; gap: 10px; }
+    input {
+      padding: 11px 14px; border: 0; border-radius: 4px; outline: none;
+      background: #1b1b1b; color: #e8e8e8; font: inherit; text-align: center;
+    }
+    input:focus { background: #262626; }
+    input::placeholder { color: #5c5c5c; }
+    button {
+      padding: 11px 14px; border: 0; border-radius: 4px; cursor: pointer;
+      background: #e8e8e8; color: #111; font: inherit; font-weight: 600;
+    }
+    button:disabled { opacity: .6; cursor: default; }
+    p { min-height: 1.4em; margin-top: 6px; font-size: 12px; color: #e07a7a; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>mournyl</h1>
+    <form id="f">
+      <input id="pw" type="password" placeholder="Password" autocomplete="current-password" aria-label="Password" required autofocus>
+      <button type="submit">Log in</button>
+    </form>
+    <p id="msg" role="status"></p>
+  </main>
+  <script>
+    const f = document.getElementById("f"), pw = document.getElementById("pw"), msg = document.getElementById("msg");
+    f.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = f.querySelector("button");
+      btn.disabled = true; msg.textContent = "";
+      try {
+        const res = await fetch("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: pw.value }) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Error " + res.status);
+        location.replace("/");
+      } catch (err) {
+        msg.textContent = err.message; pw.select();
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>`;
+  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
