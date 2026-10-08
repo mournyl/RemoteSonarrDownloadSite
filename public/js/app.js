@@ -27,7 +27,8 @@ const LISTS = {
     ["anime/movies", "Movies"],
   ],
   server: [
-    ["library", "All Shows"],
+    ["library", "TV Shows"],
+    ["library/movies", "Movies"],
     ["library/anime", "Anime"],
     ["library/missing", "Missing Episodes"],
   ],

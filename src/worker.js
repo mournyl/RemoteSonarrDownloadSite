@@ -3,6 +3,7 @@
 //   /api/showtimes?zip=12345&radius=10&date=2026-10-04  movies + showtimes near a ZIP (needs GRACENOTE_KEY)
 //   /api/theaters?zip=12345&radius=10                   nearby theaters only (OpenStreetMap, no key)
 //   /api/library                                        your Sonarr shows (needs SONARR_URL + SONARR_API_KEY)
+//   /api/movies                                         your Radarr movies (needs RADARR_URL + RADARR_API_KEY)
 //   /api/server                                         what's connected (no secrets)
 //   /api/request   POST {type, tmdbId, monitor}         add to Sonarr/Radarr in 720p (logged in only)
 //   /api/login     POST {password}  /api/logout POST    simple one-password login (LOGIN_PASSWORD secret)
@@ -39,6 +40,7 @@ export default {
       if (url.pathname === "/api/showtimes") return showtimes(url, env, cors);
       if (url.pathname === "/api/theaters") return theaters(url, cors);
       if (url.pathname === "/api/library") return library(request, env, ctx, cors);
+      if (url.pathname === "/api/movies") return movieLibrary(request, env, ctx, cors);
 
       const path = url.pathname.slice(4); // "/movie/now_playing"
       if (!ALLOWED.test(path)) return new Response("Not allowed", { status: 403, headers: cors });
@@ -519,9 +521,10 @@ async function requestMedia(request, env, ctx, cors) {
     const result = type === "tv"
       ? await addSeries(env, tmdbId, MONITOR_OPTIONS.has(body.monitor) ? body.monitor : "all")
       : await addMovie(env, tmdbId);
-    // Make My Server show the new show right away instead of after the 5-minute cache
-    if (type === "tv" && result.status === "added") {
-      ctx.waitUntil(caches.default.delete(new Request(new URL("/__cache/sonarr-library", request.url).toString())));
+    // Make My Server show the new title right away instead of after the 5-minute cache
+    if (result.status === "added") {
+      const key = type === "tv" ? "/__cache/sonarr-library" : "/__cache/radarr-library";
+      ctx.waitUntil(caches.default.delete(new Request(new URL(key, request.url).toString())));
     }
     return json(result, 200, cors);
   } catch (e) {
@@ -663,4 +666,45 @@ function loginPage() {
 </body>
 </html>`;
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+}
+
+// ---------- Your Radarr movies ----------
+async function movieLibrary(request, env, ctx, cors) {
+  if (!env.RADARR_URL || !env.RADARR_API_KEY) {
+    return json({ error: "Radarr isn't connected yet (RADARR_URL / RADARR_API_KEY missing)", notConfigured: true }, 501, cors);
+  }
+  const cache = caches.default;
+  const cacheKey = new Request(new URL("/__cache/radarr-library", request.url).toString());
+  const hit = await cache.match(cacheKey);
+  if (hit) return new Response(hit.body, { headers: { ...Object.fromEntries(hit.headers), ...cors } });
+
+  let list;
+  try {
+    list = await arr(env, env.RADARR_URL, env.RADARR_API_KEY, "Radarr", "/movie");
+  } catch (e) {
+    return json({ error: e.message }, e.status || 502, cors);
+  }
+  const movies = (Array.isArray(list) ? list : []).map((m) => {
+    const poster = (m.images || []).find((i) => i.coverType === "poster") || {};
+    const file = m.movieFile || {};
+    return {
+      tmdbId: m.tmdbId || 0,
+      title: m.title || "",
+      sortTitle: m.sortTitle || (m.title || "").toLowerCase(),
+      year: m.year || 0,
+      released: (m.digitalRelease || m.physicalRelease || m.inCinemas || "").slice(0, 10),
+      monitored: Boolean(m.monitored),
+      hasFile: Boolean(m.hasFile),
+      available: Boolean(m.isAvailable),
+      quality: (file.quality && file.quality.quality && file.quality.quality.name) || "",
+      sizeGB: Math.round(((m.sizeOnDisk || file.size || 0) / 1073741824) * 10) / 10,
+      poster: /^https:\/\//i.test(poster.remoteUrl || "") ? poster.remoteUrl : "",
+    };
+  }).sort((a, b) => a.sortTitle.localeCompare(b.sortTitle));
+
+  const out = new Response(JSON.stringify({ updated: new Date().toISOString(), movies }), {
+    headers: { "content-type": "application/json", "cache-control": `public, max-age=${LIBRARY_CACHE_SECONDS}` },
+  });
+  ctx.waitUntil(cache.put(cacheKey, out.clone()));
+  return new Response(out.body, { headers: { ...Object.fromEntries(out.headers), ...cors } });
 }
