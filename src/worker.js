@@ -861,11 +861,26 @@ async function downloads(env, cors) {
 
   const items = [];
   if (tvQ.status === "fulfilled") {
+    // A season pack is ONE download that Sonarr lists once per episode (each with the
+    // whole pack's size). Group by download so sizes aren't counted over and over.
+    const groups = new Map();
     for (const r of tvQ.value) {
-      const ep = r.episode || {};
+      const id = String(r.downloadId || `q${r.id}`).toLowerCase();
+      if (!groups.has(id)) groups.set(id, []);
+      groups.get(id).push(r);
+    }
+    for (const recs of groups.values()) {
+      const r = recs[0];
+      const eps = recs.map((x) => x.episode || {}).filter((e) => e.id || e.episodeNumber != null)
+        .sort((a, b) => (a.seasonNumber - b.seasonNumber) || (a.episodeNumber - b.episodeNumber));
+      const ep = eps[0] || {};
       items.push(item(r, {
-        type: "tv", seriesId: r.seriesId, episodeId: r.episodeId, season: ep.seasonNumber, episode: ep.episodeNumber,
-        title: (r.series && r.series.title) || "", episodeTitle: ep.title || "",
+        type: "tv", seriesId: r.seriesId, title: (r.series && r.series.title) || "",
+        episodeIds: recs.map((x) => x.episodeId).filter(Boolean),
+        season: ep.seasonNumber, episode: ep.episodeNumber,
+        lastEpisode: eps.length > 1 ? eps[eps.length - 1].episodeNumber : null,
+        episodeCount: eps.length,
+        episodeTitle: eps.length === 1 ? ep.title || "" : "",
       }));
     }
   }
@@ -884,10 +899,15 @@ async function downloads(env, cors) {
       secondsLeft: st === "downloading" ? toSeconds(slot.timeleft) : null, warning: "",
     });
   }
-  items.sort((a, b) => a.order - b.order);
+  // Already downloaded (just importing into the library) isn't shown.
+  // Downloading now first, then paused, queued and failed, each in SABnzbd's order.
+  const rank = { downloading: 0, paused: 1, queued: 2, failed: 3 };
+  const shown = items
+    .filter((i) => i.status !== "importing" && i.status !== "completed" && !(i.percent >= 100 && i.status !== "failed"))
+    .sort((a, b) => (rank[a.status] ?? 2) - (rank[b.status] ?? 2) || a.order - b.order);
 
   return json({
-    items,
+    items: shown,
     sab: q ? {
       paused: Boolean(q.paused) || /paused/i.test(q.status || ""),
       speedKBs: Math.round(Number(q.kbpersec) || 0),

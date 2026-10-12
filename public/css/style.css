@@ -235,7 +235,7 @@ footer { text-align: center; color: var(--faint); font-size: 11px; padding: 24px
 .dl-panel { margin-top: 10px; }
 .dl-panel .dl-text { font-size: 12px; color: var(--text); margin-bottom: 6px; }
 .dl-panel .dl-bar { height: 3px; border-radius: 2px; background: var(--raise); overflow: hidden; }
-.dl-bar span { display: block; height: 100%; background: #4a90d9; transition: width .6s ease; }
+.dl-bar span { display: block; height: 100%; background: #4a90d9; transition: width 1s linear; }
 .dl[data-status="paused"] .dl-bar span, .dl[data-status="queued"] .dl-bar span { background: var(--muted); }
 .dl[data-status="importing"] .dl-bar span { background: #3fae6a; }
 .dl[data-status="failed"] .dl-bar span { background: #e07a7a; }
@@ -277,7 +277,7 @@ footer { text-align: center; color: var(--faint); font-size: 11px; padding: 24px
 .dl-sum-chev { color: var(--muted); transition: transform .2s; }
 .dl-summary.open .dl-sum-chev { transform: rotate(180deg); }
 .dl-sum-bar { height: 3px; background: var(--chip); }
-.dl-sum-bar span, .dl-row-bar span { display: block; height: 100%; background: #4a90d9; transition: width .6s ease; }
+.dl-sum-bar span, .dl-row-bar span { display: block; height: 100%; background: #4a90d9; transition: width 1s linear; }
 .dl-summary.paused .dl-sum-bar span { background: var(--muted); }
 .dl-list { list-style: none; padding: 4px 0; }
 .dl-row { padding: 10px 16px; }

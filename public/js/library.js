@@ -366,9 +366,11 @@ const downloads = { items: [], byKey: new Map(), byEpisode: new Map(), sab: null
 
 function fmtLeft(sec) {
   if (sec == null) return "";
-  if (sec < 60) return "<1m left";
-  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
-  return h ? `${h}h ${m}m left` : `${m}m left`;
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  if (h) return `${h}h ${m}m left`;
+  if (m >= 10) return `${m}m left`;
+  return m ? `${m}m ${s}s left` : `${s}s left`;
 }
 
 function dlText(d, long) {
@@ -405,6 +407,59 @@ function showDownload(el) {
   box.querySelector(".dl-bar span").style.width = `${d.status === "importing" ? 100 : d.percent}%`;
 }
 
+// Build the per-show / per-movie / per-episode views from the queue items
+function buildDownloadMaps(items) {
+  const byKey = new Map(), byEpisode = new Map();
+  for (const it of items) {
+    if (it.type === "other") continue; // added by hand in SAB: only in the summary list
+    const key = it.type === "tv" ? `tv:${it.seriesId}` : `movie:${it.movieId}`;
+    if (it.type === "tv") for (const id of it.episodeIds || []) byEpisode.set(id, it);
+    const a = byKey.get(key) || { status: "", count: 0, sizeMB: 0, doneMB: 0, secondsLeft: null, warning: "" };
+    a.count += it.episodeCount || 1;
+    a.sizeMB += it.sizeMB || 0;
+    a.doneMB += ((it.sizeMB || 0) * (it.percent || 0)) / 100;
+    if (it.secondsLeft != null) a.secondsLeft = Math.max(a.secondsLeft || 0, it.secondsLeft);
+    a.warning = a.warning || it.warning;
+    const rank = ["downloading", "importing", "paused", "queued", "failed"];
+    if (!a.status || rank.indexOf(it.status) < rank.indexOf(a.status)) a.status = it.status;
+    a.percent = a.sizeMB ? (a.doneMB / a.sizeMB) * 100 : it.percent || 0;
+    byKey.set(key, a);
+  }
+  downloads.byKey = byKey;
+  downloads.byEpisode = byEpisode;
+}
+
+function renderDownloads() {
+  document.querySelectorAll("[data-dl]").forEach(showDownload);
+  updateDownloadBar();
+  document.querySelectorAll(".ep[data-ep]").forEach(showEpisodeState);
+}
+
+// Between checks, move the bars and count down every second using SAB's current speed,
+// so progress looks live instead of jumping every few seconds.
+function tickDownloads() {
+  const raw = downloads.raw;
+  if (!raw || document.hidden) return;
+  const dt = (Date.now() - downloads.fetchedAt) / 1000;
+  const active = raw.filter((i) => i.status === "downloading");
+  if (!active.length) return;
+  const speedMB = downloads.sab && !downloads.sab.paused ? downloads.sab.speedKBs / 1024 : 0;
+  const share = speedMB / active.length;
+  downloads.items = raw.map((i) => {
+    if (i.status !== "downloading") return i;
+    const est = { ...i };
+    if (est.secondsLeft != null) est.secondsLeft = Math.max(0, est.secondsLeft - dt);
+    if (share && est.sizeMB) est.percent = Math.min(99.9, est.percent + ((share * dt) / est.sizeMB) * 100);
+    return est;
+  });
+  if (downloads.sab && downloads.sab.secondsLeft != null) {
+    downloads.sabLeft = Math.max(0, downloads.sab.secondsLeft - dt);
+  }
+  buildDownloadMaps(downloads.items);
+  renderDownloads();
+}
+setInterval(tickDownloads, 1000);
+
 async function pollDownloads() {
   clearTimeout(downloads.timer);
   if (downloads.busy) return;
@@ -419,41 +474,27 @@ async function pollDownloads() {
     const data = await res.json();
     const before = new Set(downloads.byKey.keys());
 
-    // Combine episodes of the same show into one entry
-    const byKey = new Map(), byEpisode = new Map();
-    for (const it of data.items || []) {
-      const key = it.type === "tv" ? `tv:${it.seriesId}` : `movie:${it.movieId}`;
-      if (it.type === "tv" && it.episodeId) byEpisode.set(it.episodeId, it);
-      const a = byKey.get(key) || { status: "", count: 0, sizeMB: 0, doneMB: 0, secondsLeft: null, warning: "" };
-      a.count += 1;
-      a.sizeMB += it.sizeMB || 0;
-      a.doneMB += ((it.sizeMB || 0) * (it.percent || 0)) / 100;
-      if (it.secondsLeft != null) a.secondsLeft = Math.max(a.secondsLeft || 0, it.secondsLeft);
-      a.warning = a.warning || it.warning;
-      const rank = ["downloading", "importing", "paused", "queued", "failed"];
-      if (!a.status || rank.indexOf(it.status) < rank.indexOf(a.status)) a.status = it.status;
-      a.percent = a.sizeMB ? (a.doneMB / a.sizeMB) * 100 : it.percent || 0;
-      byKey.set(key, a);
-    }
-    downloads.items = data.items || [];
+    downloads.raw = data.items || [];
+    downloads.items = downloads.raw;
+    downloads.fetchedAt = Date.now();
     downloads.loaded = true;
-    downloads.byKey = byKey;
-    downloads.byEpisode = byEpisode;
     downloads.sab = data.sab;
-    active = byKey.size > 0;
-
-    document.querySelectorAll("[data-dl]").forEach(showDownload);
-    updateDownloadBar();
-    document.querySelectorAll(".ep[data-ep]").forEach(showEpisodeState);
+    downloads.sabLeft = data.sab ? data.sab.secondsLeft : null;
+    buildDownloadMaps(downloads.raw);
+    active = downloads.raw.length > 0;
+    renderDownloads();
 
     // Something finished: reload the library so badges and episode lists catch up
-    const finished = [...before].filter((k) => !byKey.has(k));
-    if (finished.length) refreshLibrary(finished);
+    const finished = [...before].filter((k) => !downloads.byKey.has(k));
+    if (finished.length) {
+      refreshLibrary(finished);
+      setTimeout(() => refreshLibrary(finished), 60000); // importing can take a bit longer
+    }
   } catch {
     // ignore; try again next time
   } finally {
     downloads.busy = false;
-    downloads.timer = setTimeout(pollDownloads, active ? 5000 : 30000);
+    downloads.timer = setTimeout(pollDownloads, active ? 3000 : 30000);
   }
 }
 
@@ -488,7 +529,9 @@ const pad2 = (n) => String(n).padStart(2, "0");
 
 function dlName(it) {
   if (it.type === "tv") {
-    const code = it.season != null && it.episode != null ? `S${pad2(it.season)}E${pad2(it.episode)}` : "";
+    let code = it.season != null && it.episode != null ? `S${pad2(it.season)}E${pad2(it.episode)}` : "";
+    if (it.lastEpisode != null) code += `–E${pad2(it.lastEpisode)}`;               // season pack
+    if (it.episodeCount > 1) code += ` (${it.episodeCount} episodes)`;
     return { main: it.title || "TV episode", sub: [code, it.episodeTitle].filter(Boolean).join(" · ") };
   }
   if (it.type === "movie") return { main: it.title || "Movie", sub: it.year ? String(it.year) : "" };
@@ -513,6 +556,7 @@ function updateDownloadBar() {
   if (!items.length) {
     downloads.open = false;
     bar.className = "dl-summary empty";
+    bar.dataset.sig = "";
     bar.innerHTML = `<div class="dl-sum-head"><span class="dl-sum-title">No downloads in progress</span></div>`;
     return;
   }
@@ -523,7 +567,7 @@ function updateDownloadBar() {
   const active = items.filter((i) => i.status === "downloading").length;
   const sab = downloads.sab;
   const paused = sab ? sab.paused : items.every((i) => i.status === "paused");
-  const left = sab && !paused && sab.secondsLeft ? sab.secondsLeft
+  const left = sab && !paused && downloads.sabLeft ? downloads.sabLeft
     : Math.max(0, ...items.map((i) => i.secondsLeft || 0)) || null;
 
   const title = paused ? "Downloads paused" : active ? "Downloading" : items.some((i) => i.status === "importing") ? "Importing" : "Queued";
@@ -534,9 +578,26 @@ function updateDownloadBar() {
   ].filter(Boolean).join(" · ");
 
   bar.className = `dl-summary${downloads.open ? " open" : ""}${paused ? " paused" : ""}`;
+  const rowMeta = (it) => [dlText(it), it.sizeMB ? fmtSize(it.sizeMB) : ""].filter(Boolean).join(" · ");
+  const rowPct = (it) => `${it.status === "importing" ? 100 : it.percent || 0}%`;
+
+  // Same items as last time: just update the numbers (no flicker, clicks aren't lost)
+  const sig = items.map((it) => `${it.type}|${it.release}|${it.status}|${it.warning}`).join("\n") + `|${downloads.open}`;
+  if (bar.dataset.sig === sig) {
+    bar.querySelector(".dl-sum-label").textContent = title;
+    bar.querySelector(".dl-sum-right").textContent = right;
+    bar.querySelector(".dl-sum-bar span").style.width = `${pct.toFixed(1)}%`;
+    bar.querySelectorAll(".dl-row").forEach((row) => {
+      const it = items[row.dataset.i];
+      row.querySelector(".dl-row-meta").textContent = rowMeta(it);
+      row.querySelector(".dl-row-bar span").style.width = rowPct(it);
+    });
+    return;
+  }
+  bar.dataset.sig = sig;
   bar.innerHTML = `
     <button class="dl-sum-head" type="button" aria-expanded="${downloads.open}">
-      <span class="dl-sum-title">⬇ ${title} <span class="dl-sum-count">${items.length} item${items.length === 1 ? "" : "s"}</span></span>
+      <span class="dl-sum-title">⬇ <span class="dl-sum-label">${title}</span> <span class="dl-sum-count">${items.length} item${items.length === 1 ? "" : "s"}</span></span>
       <span class="dl-sum-right">${esc(right)}</span>
       <span class="dl-sum-chev" aria-hidden="true">▾</span>
     </button>
@@ -544,14 +605,13 @@ function updateDownloadBar() {
     <ol class="dl-list"${downloads.open ? "" : " hidden"}>
       ${items.map((it, i) => {
         const n = dlName(it);
-        const meta = [dlText(it), it.sizeMB ? fmtSize(it.sizeMB) : ""].filter(Boolean).join(" · ");
         return `
         <li class="dl-row" data-i="${i}" data-status="${esc(it.status)}"${dlTarget(it) ? ` tabindex="0" role="button"` : ""}>
           <div class="dl-row-top">
             <span class="dl-row-name">${esc(n.main)}${n.sub ? ` <small>${esc(n.sub)}</small>` : ""}</span>
-            <span class="dl-row-meta">${esc(meta)}</span>
+            <span class="dl-row-meta">${esc(rowMeta(it))}</span>
           </div>
-          <div class="dl-row-bar"><span style="width:${it.status === "importing" ? 100 : it.percent || 0}%"></span></div>
+          <div class="dl-row-bar"><span style="width:${rowPct(it)}"></span></div>
           ${it.warning ? `<div class="dl-row-warn">${esc(it.warning)}</div>` : ""}
         </li>`;
       }).join("")}
@@ -559,7 +619,7 @@ function updateDownloadBar() {
 
   bar.querySelector(".dl-sum-head").onclick = () => { downloads.open = !downloads.open; updateDownloadBar(); };
   bar.querySelectorAll(".dl-row[role=button]").forEach((row) => {
-    const go = () => { const t = dlTarget(items[row.dataset.i]); if (t) openDetail(t[0], t[1]); };
+    const go = () => { const t = dlTarget(downloads.items[row.dataset.i]); if (t) openDetail(t[0], t[1]); };
     row.onclick = go;
     row.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } };
   });
