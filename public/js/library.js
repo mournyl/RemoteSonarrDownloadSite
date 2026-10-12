@@ -362,7 +362,7 @@ function showEpisodeState(li) {
 }
 
 // ---------- Downloads (Sonarr/Radarr queues + live SABnzbd) ----------
-const downloads = { byKey: new Map(), byEpisode: new Map(), sab: null, timer: 0, busy: false };
+const downloads = { items: [], byKey: new Map(), byEpisode: new Map(), sab: null, timer: 0, busy: false, open: false, loaded: false };
 
 function fmtLeft(sec) {
   if (sec == null) return "";
@@ -435,12 +435,15 @@ async function pollDownloads() {
       a.percent = a.sizeMB ? (a.doneMB / a.sizeMB) * 100 : it.percent || 0;
       byKey.set(key, a);
     }
+    downloads.items = data.items || [];
+    downloads.loaded = true;
     downloads.byKey = byKey;
     downloads.byEpisode = byEpisode;
     downloads.sab = data.sab;
     active = byKey.size > 0;
 
     document.querySelectorAll("[data-dl]").forEach(showDownload);
+    updateDownloadBar();
     document.querySelectorAll(".ep[data-ep]").forEach(showEpisodeState);
 
     // Something finished: reload the library so badges and episode lists catch up
@@ -478,3 +481,86 @@ async function refreshLibrary(finished = []) {
 
 document.addEventListener("visibilitychange", () => { if (!document.hidden) pollDownloads(); });
 libraryReady.then(pollDownloads);
+
+// ---------- Download summary at the top of My Server ----------
+const fmtSize = (mb) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`);
+const pad2 = (n) => String(n).padStart(2, "0");
+
+function dlName(it) {
+  if (it.type === "tv") {
+    const code = it.season != null && it.episode != null ? `S${pad2(it.season)}E${pad2(it.episode)}` : "";
+    return { main: it.title || "TV episode", sub: [code, it.episodeTitle].filter(Boolean).join(" · ") };
+  }
+  if (it.type === "movie") return { main: it.title || "Movie", sub: it.year ? String(it.year) : "" };
+  return { main: it.title || "Download", sub: "Added in SABnzbd" };
+}
+
+// Which TMDB popup a queue row opens (if we know it)
+function dlTarget(it) {
+  if (it.type === "tv") { const s = library.byId.get(it.seriesId); return s && s.tmdbId ? ["tv", s.tmdbId] : null; }
+  if (it.type === "movie") { const m = movieLib.byId.get(it.movieId); return m && m.tmdbId ? ["movie", m.tmdbId] : null; }
+  return null;
+}
+
+function updateDownloadBar() {
+  const bar = document.getElementById("dlBar");
+  if (!bar) return;
+  const show = state.type === "server" && downloads.loaded && (server.tv || server.movie);
+  bar.hidden = !show;
+  if (!show) return;
+
+  const items = downloads.items;
+  if (!items.length) {
+    downloads.open = false;
+    bar.className = "dl-summary empty";
+    bar.innerHTML = `<div class="dl-sum-head"><span class="dl-sum-title">No downloads in progress</span></div>`;
+    return;
+  }
+
+  const size = items.reduce((t, i) => t + (i.sizeMB || 0), 0);
+  const done = items.reduce((t, i) => t + ((i.sizeMB || 0) * (i.percent || 0)) / 100, 0);
+  const pct = size ? (done / size) * 100 : 0;
+  const active = items.filter((i) => i.status === "downloading").length;
+  const sab = downloads.sab;
+  const paused = sab ? sab.paused : items.every((i) => i.status === "paused");
+  const left = sab && !paused && sab.secondsLeft ? sab.secondsLeft
+    : Math.max(0, ...items.map((i) => i.secondsLeft || 0)) || null;
+
+  const title = paused ? "Downloads paused" : active ? "Downloading" : items.some((i) => i.status === "importing") ? "Importing" : "Queued";
+  const right = [
+    paused ? "" : fmtLeft(left),
+    !paused && sab && sab.speedKBs ? `${(sab.speedKBs / 1024).toFixed(1)} MB/s` : "",
+    size ? `${fmtSize(size - done)} to go` : "",
+  ].filter(Boolean).join(" · ");
+
+  bar.className = `dl-summary${downloads.open ? " open" : ""}${paused ? " paused" : ""}`;
+  bar.innerHTML = `
+    <button class="dl-sum-head" type="button" aria-expanded="${downloads.open}">
+      <span class="dl-sum-title">⬇ ${title} <span class="dl-sum-count">${items.length} item${items.length === 1 ? "" : "s"}</span></span>
+      <span class="dl-sum-right">${esc(right)}</span>
+      <span class="dl-sum-chev" aria-hidden="true">▾</span>
+    </button>
+    <div class="dl-sum-bar"><span style="width:${pct.toFixed(1)}%"></span></div>
+    <ol class="dl-list"${downloads.open ? "" : " hidden"}>
+      ${items.map((it, i) => {
+        const n = dlName(it);
+        const meta = [dlText(it), it.sizeMB ? fmtSize(it.sizeMB) : ""].filter(Boolean).join(" · ");
+        return `
+        <li class="dl-row" data-i="${i}" data-status="${esc(it.status)}"${dlTarget(it) ? ` tabindex="0" role="button"` : ""}>
+          <div class="dl-row-top">
+            <span class="dl-row-name">${esc(n.main)}${n.sub ? ` <small>${esc(n.sub)}</small>` : ""}</span>
+            <span class="dl-row-meta">${esc(meta)}</span>
+          </div>
+          <div class="dl-row-bar"><span style="width:${it.status === "importing" ? 100 : it.percent || 0}%"></span></div>
+          ${it.warning ? `<div class="dl-row-warn">${esc(it.warning)}</div>` : ""}
+        </li>`;
+      }).join("")}
+    </ol>`;
+
+  bar.querySelector(".dl-sum-head").onclick = () => { downloads.open = !downloads.open; updateDownloadBar(); };
+  bar.querySelectorAll(".dl-row[role=button]").forEach((row) => {
+    const go = () => { const t = dlTarget(items[row.dataset.i]); if (t) openDetail(t[0], t[1]); };
+    row.onclick = go;
+    row.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } };
+  });
+}

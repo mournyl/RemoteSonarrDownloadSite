@@ -823,8 +823,8 @@ const arrQueue = (env, base, key, app, extra) =>
 
 async function downloads(env, cors) {
   const [tvQ, movieQ, sab] = await Promise.allSettled([
-    arrQueue(env, env.SONARR_URL, env.SONARR_API_KEY, "Sonarr", "&includeEpisode=true"),
-    arrQueue(env, env.RADARR_URL, env.RADARR_API_KEY, "Radarr", ""),
+    arrQueue(env, env.SONARR_URL, env.SONARR_API_KEY, "Sonarr", "&includeEpisode=true&includeSeries=true"),
+    arrQueue(env, env.RADARR_URL, env.RADARR_API_KEY, "Radarr", "&includeMovie=true"),
     sabQueue(env),
   ]);
   const errors = [tvQ, movieQ, sab].filter((r) => r.status === "rejected").map((r) => r.reason.message);
@@ -834,8 +834,10 @@ async function downloads(env, cors) {
   const slots = new Map();
   for (const s of (q && q.slots) || []) slots.set(String(s.nzo_id || "").toLowerCase(), s);
 
+  const used = new Set();
   const item = (r, extra) => {
     const slot = slots.get(String(r.downloadId || "").toLowerCase());
+    if (slot) used.add(slot);
     const size = r.size || 0, left = r.sizeleft || 0;
     let status = String(r.status || "").toLowerCase();                 // downloading, queued, paused, completed, failed, warning…
     const tracked = String(r.trackedDownloadState || "").toLowerCase(); // downloading, importPending, importing, failedPending…
@@ -845,6 +847,8 @@ async function downloads(env, cors) {
     const pct = slot ? Number(slot.percentage) : size ? ((size - left) / size) * 100 : 0;
     return {
       ...extra,
+      release: r.title || (slot && slot.filename) || "",
+      order: slot ? Number(slot.index) || 0 : 9999,
       status,
       percent: Math.max(0, Math.min(100, Math.round(pct * 10) / 10)),
       sizeMB: Math.round(slot ? Number(slot.mb) : size / 1048576),
@@ -859,12 +863,28 @@ async function downloads(env, cors) {
   if (tvQ.status === "fulfilled") {
     for (const r of tvQ.value) {
       const ep = r.episode || {};
-      items.push(item(r, { type: "tv", seriesId: r.seriesId, episodeId: r.episodeId, season: ep.seasonNumber, episode: ep.episodeNumber }));
+      items.push(item(r, {
+        type: "tv", seriesId: r.seriesId, episodeId: r.episodeId, season: ep.seasonNumber, episode: ep.episodeNumber,
+        title: (r.series && r.series.title) || "", episodeTitle: ep.title || "",
+      }));
     }
   }
   if (movieQ.status === "fulfilled") {
-    for (const r of movieQ.value) items.push(item(r, { type: "movie", movieId: r.movieId }));
+    for (const r of movieQ.value) {
+      items.push(item(r, { type: "movie", movieId: r.movieId, title: (r.movie && r.movie.title) || "", year: (r.movie && r.movie.year) || 0 }));
+    }
   }
+  // Anything else in SABnzbd that Sonarr/Radarr didn't send (added by hand)
+  for (const slot of slots.values()) {
+    if (used.has(slot)) continue;
+    const st = /paused/i.test(slot.status) ? "paused" : /queued/i.test(slot.status) ? "queued" : "downloading";
+    items.push({
+      type: "other", title: slot.filename || "", release: slot.filename || "", order: Number(slot.index) || 0, status: st,
+      percent: Number(slot.percentage) || 0, sizeMB: Math.round(Number(slot.mb) || 0), leftMB: Math.round(Number(slot.mbleft) || 0),
+      secondsLeft: st === "downloading" ? toSeconds(slot.timeleft) : null, warning: "",
+    });
+  }
+  items.sort((a, b) => a.order - b.order);
 
   return json({
     items,

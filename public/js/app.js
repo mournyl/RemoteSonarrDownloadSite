@@ -154,6 +154,7 @@ function reset() {
   grid.innerHTML = "";
   renderLists();
   updateTheaterBar();
+  if (typeof updateDownloadBar === "function") updateDownloadBar(); // My Server download summary (library.js)
   loadMore();
 }
 

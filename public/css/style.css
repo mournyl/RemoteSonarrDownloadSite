@@ -265,3 +265,36 @@ footer { text-align: center; color: var(--faint); font-size: 11px; padding: 24px
   .ep { grid-template-columns: 24px 1fr auto; }
   .ep-d { display: none; }
 }
+
+/* ---------- My Server download summary ---------- */
+.dl-summary { margin: 0 0 30px; background: var(--raise); border-radius: var(--radius); overflow: hidden; }
+.dl-sum-head { display: flex; align-items: center; gap: 12px; width: 100%; padding: 14px 16px 12px; background: none; border: 0; cursor: pointer; text-align: left; }
+.dl-summary.empty .dl-sum-head { cursor: default; padding: 12px 16px; }
+.dl-summary.empty .dl-sum-title { font-weight: 400; color: var(--muted); }
+.dl-sum-title { font-weight: 600; font-size: 14px; }
+.dl-sum-count { margin-left: 6px; font-weight: 400; font-size: 12px; color: var(--muted); }
+.dl-sum-right { margin-left: auto; font-size: 13px; color: var(--muted); white-space: nowrap; }
+.dl-sum-chev { color: var(--muted); transition: transform .2s; }
+.dl-summary.open .dl-sum-chev { transform: rotate(180deg); }
+.dl-sum-bar { height: 3px; background: var(--chip); }
+.dl-sum-bar span, .dl-row-bar span { display: block; height: 100%; background: #4a90d9; transition: width .6s ease; }
+.dl-summary.paused .dl-sum-bar span { background: var(--muted); }
+.dl-list { list-style: none; padding: 4px 0; }
+.dl-row { padding: 10px 16px; }
+.dl-row + .dl-row { border-top: 1px solid var(--chip); }
+.dl-row[role=button] { cursor: pointer; }
+.dl-row[role=button]:hover, .dl-row[role=button]:focus-visible { background: var(--chip); outline: none; }
+.dl-row-top { display: flex; align-items: baseline; gap: 12px; }
+.dl-row-name { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dl-row-name small { margin-left: 6px; font-size: 12px; color: var(--muted); }
+.dl-row-meta { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.dl-row-bar { margin-top: 7px; height: 2px; border-radius: 1px; background: var(--chip); overflow: hidden; }
+.dl-row[data-status="queued"] .dl-row-bar span, .dl-row[data-status="paused"] .dl-row-bar span { background: var(--muted); }
+.dl-row[data-status="importing"] .dl-row-bar span { background: #3fae6a; }
+.dl-row[data-status="failed"] .dl-row-bar span { background: #e07a7a; }
+.dl-row-warn { margin-top: 4px; font-size: 12px; color: #e0a24a; }
+@media (max-width: 600px) {
+  .dl-sum-head { flex-wrap: wrap; }
+  .dl-sum-right { order: 3; width: 100%; margin-left: 0; }
+  .dl-row-top { flex-direction: column; gap: 2px; }
+}
