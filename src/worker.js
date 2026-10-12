@@ -4,6 +4,8 @@
 //   /api/theaters?zip=12345&radius=10                   nearby theaters only (OpenStreetMap, no key)
 //   /api/library                                        your Sonarr shows (needs SONARR_URL + SONARR_API_KEY)
 //   /api/movies                                         your Radarr movies (needs RADARR_URL + RADARR_API_KEY)
+//   /api/episodes?series=123                            every episode of one Sonarr show
+//   /api/downloads                                      what's downloading now (Sonarr/Radarr queues + live SABnzbd stats)
 //   /api/server                                         what's connected (no secrets)
 //   /api/request   POST {type, tmdbId, monitor}         add to Sonarr (720p) / Radarr (1080p) (logged in only)
 //   /api/login     POST {password}  /api/logout POST    simple one-password login (LOGIN_PASSWORD secret)
@@ -25,7 +27,20 @@ export default {
           status: 401, headers: { "content-type": "application/json", "cache-control": "no-store" },
         });
       }
-      return Response.redirect(new URL("/login", url).toString(), 302);
+      return toLogin(url);
+    }
+
+    // ---- Every page load needs a fresh login ----
+    // Logging in sets a one-time "ticket" cookie. Loading the page uses it up, so a reload,
+    // a new tab, or a restored tab goes back to /login. (The session cookie stays for the
+    // page's own API calls and files.)
+    if (!url.pathname.startsWith("/api/") && isPageLoad(request, url)) {
+      if (readCookie(request, TICKET_COOKIE) !== "1") return toLogin(url);
+      const page = await env.ASSETS.fetch(request);
+      const res = new Response(page.body, page);
+      res.headers.set("cache-control", "no-store");
+      res.headers.append("set-cookie", `${TICKET_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`);
+      return res;
     }
 
     if (url.pathname.startsWith("/api/")) {
@@ -41,6 +56,8 @@ export default {
       if (url.pathname === "/api/theaters") return theaters(url, cors);
       if (url.pathname === "/api/library") return library(request, env, ctx, cors);
       if (url.pathname === "/api/movies") return movieLibrary(request, env, ctx, cors);
+      if (url.pathname === "/api/episodes") return episodes(url, env, cors);
+      if (url.pathname === "/api/downloads") return downloads(env, cors);
 
       const path = url.pathname.slice(4); // "/movie/now_playing"
       if (!ALLOWED.test(path)) return new Response("Not allowed", { status: 403, headers: cors });
@@ -307,7 +324,8 @@ async function library(request, env, ctx, cors) {
   // Uses a private cache key that visitors can't request directly.
   const cache = caches.default;
   const cacheKey = new Request(new URL("/__cache/sonarr-library", request.url).toString());
-  const hit = await cache.match(cacheKey);
+  // ?fresh=1 skips the cached copy (the site asks for that right after a download finishes)
+  const hit = new URL(request.url).searchParams.has("fresh") ? null : await cache.match(cacheKey);
   if (hit) return new Response(hit.body, { headers: { ...Object.fromEntries(hit.headers), ...cors } });
 
   const headers = { "X-Api-Key": env.SONARR_API_KEY, accept: "application/json" };
@@ -338,6 +356,7 @@ async function library(request, env, ctx, cors) {
     const poster = (s.images || []).find((i) => i.coverType === "poster") || {};
     const posterUrl = /^https:\/\//i.test(poster.remoteUrl || "") ? poster.remoteUrl : "";
     return {
+      id: s.id,                          // Sonarr's own id (episodes + downloads use it)
       tmdbId: s.tmdbId || 0,
       tvdbId: s.tvdbId || 0,
       title: s.title || "",
@@ -534,11 +553,31 @@ async function requestMedia(request, env, ctx, cors) {
 
 // ---------- Login ----------
 // The whole site is behind one password (LOGIN_PASSWORD secret). Logging in sets a signed,
-// HttpOnly session cookie: it's gone when the browser closes, and it stops working after
-// SESSION_HOURS even if the browser restores it. Changing LOGIN_PASSWORD logs out every device.
+// HttpOnly session cookie (for the page's API calls, max SESSION_HOURS) plus a one-time ticket
+// that only the next page load can use, so every load of the site asks for the password. Changing LOGIN_PASSWORD logs out every device.
 // wrangler.jsonc needs "run_worker_first": true so page files go through this check too.
 
 const SESSION_COOKIE = "mournyl_session";
+const TICKET_COOKIE = "mournyl_ticket";
+
+// A full page load (typing the address, reload, new tab) rather than a script, style or image
+function isPageLoad(request, url) {
+  const dest = request.headers.get("sec-fetch-dest");
+  if (dest) return dest === "document" || dest === "iframe";
+  return url.pathname === "/" || url.pathname.endsWith(".html");
+}
+
+// Send to /login and drop the old session so the password is needed again
+function toLogin(url) {
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: new URL("/login", url).toString(),
+      "cache-control": "no-store",
+      "set-cookie": `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`,
+    },
+  });
+}
 const SESSION_HOURS = 4;
 const textEnc = new TextEncoder();
 
@@ -589,7 +628,10 @@ async function login(request, env) {
   const expires = String(Date.now() + SESSION_HOURS * 3600000);
   // No Max-Age/Expires: a session cookie, deleted when the browser closes
   const cookie = `${SESSION_COOKIE}=${expires}.${await sign(env, expires)}; Path=/; HttpOnly; Secure; SameSite=Strict`;
-  return sessionResponse({ ok: true }, 200, cookie);
+  const res = sessionResponse({ ok: true }, 200, cookie);
+  // One-time ticket for the page load right after logging in (used up by that load)
+  res.headers.append("set-cookie", `${TICKET_COOKIE}=1; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=60`);
+  return res;
 }
 
 function logout(request) {
@@ -675,7 +717,8 @@ async function movieLibrary(request, env, ctx, cors) {
   }
   const cache = caches.default;
   const cacheKey = new Request(new URL("/__cache/radarr-library", request.url).toString());
-  const hit = await cache.match(cacheKey);
+  // ?fresh=1 skips the cached copy (the site asks for that right after a download finishes)
+  const hit = new URL(request.url).searchParams.has("fresh") ? null : await cache.match(cacheKey);
   if (hit) return new Response(hit.body, { headers: { ...Object.fromEntries(hit.headers), ...cors } });
 
   let list;
@@ -688,6 +731,7 @@ async function movieLibrary(request, env, ctx, cors) {
     const poster = (m.images || []).find((i) => i.coverType === "poster") || {};
     const file = m.movieFile || {};
     return {
+      id: m.id,                          // Radarr's own id (downloads use it)
       tmdbId: m.tmdbId || 0,
       title: m.title || "",
       sortTitle: m.sortTitle || (m.title || "").toLowerCase(),
@@ -707,4 +751,128 @@ async function movieLibrary(request, env, ctx, cors) {
   });
   ctx.waitUntil(cache.put(cacheKey, out.clone()));
   return new Response(out.body, { headers: { ...Object.fromEntries(out.headers), ...cors } });
+}
+
+// ---------- Episodes of one show (Sonarr) ----------
+async function episodes(url, env, cors) {
+  if (!env.SONARR_URL || !env.SONARR_API_KEY) return json({ error: "Sonarr isn't connected" }, 501, cors);
+  const id = Number(url.searchParams.get("series"));
+  if (!Number.isInteger(id) || id <= 0) return json({ error: "Missing series id" }, 400, cors);
+  try {
+    const list = await arr(env, env.SONARR_URL, env.SONARR_API_KEY, "Sonarr", `/episode?seriesId=${id}&includeEpisodeFile=true`);
+    const eps = (Array.isArray(list) ? list : []).map((e) => {
+      const file = e.episodeFile || {};
+      return {
+        id: e.id,
+        season: e.seasonNumber || 0,
+        number: e.episodeNumber || 0,
+        title: e.title || "",
+        airDate: e.airDateUtc || e.airDate || "",
+        hasFile: Boolean(e.hasFile),
+        monitored: Boolean(e.monitored),
+        quality: (file.quality && file.quality.quality && file.quality.quality.name) || "",
+        sizeMB: Math.round((file.size || 0) / 1048576),
+      };
+    }).sort((a, b) => a.season - b.season || a.number - b.number);
+    return json({ episodes: eps }, 200, cors);
+  } catch (e) {
+    return json({ error: e.message }, e.status || 502, cors);
+  }
+}
+
+// ---------- What's downloading now ----------
+// Sonarr's and Radarr's queues say WHICH show/episode/movie each download is.
+// SABnzbd (optional: SAB_URL + SAB_API_KEY) adds live percent, speed and time left.
+// Without SAB it still works using the queues, which Sonarr/Radarr refresh about once a minute.
+
+// "1.02:03:04" / "02:03:04" / "0:05:12" -> seconds
+function toSeconds(t) {
+  const m = String(t || "").match(/^(?:(\d+)\.)?(\d+):(\d+):(\d+)/);
+  return m ? (+(m[1] || 0)) * 86400 + (+m[2]) * 3600 + (+m[3]) * 60 + (+m[4]) : null;
+}
+
+async function sabQueue(env) {
+  if (!env.SAB_URL || !env.SAB_API_KEY) return null;
+  const headers = { accept: "application/json" };
+  if (env.CF_ACCESS_CLIENT_ID && env.CF_ACCESS_CLIENT_SECRET) {
+    headers["CF-Access-Client-Id"] = env.CF_ACCESS_CLIENT_ID;
+    headers["CF-Access-Client-Secret"] = env.CF_ACCESS_CLIENT_SECRET;
+  }
+  const target = new URL(env.SAB_URL.replace(/\/+$/, "") + "/api");
+  target.search = new URLSearchParams({ mode: "queue", output: "json", apikey: env.SAB_API_KEY, limit: "200" });
+  let res;
+  try {
+    res = await fetch(target, { headers, redirect: "manual" });
+  } catch {
+    throw new Error("Couldn't reach SABnzbd (is the tunnel running?)");
+  }
+  const type = res.headers.get("content-type") || "";
+  if (res.status === 403) throw new Error("SABnzbd refused the request (add sab.mournyl.com to SABnzbd's host_whitelist)");
+  if ((res.status >= 300 && res.status < 400) || (res.ok && !type.includes("json"))) {
+    throw new Error("Cloudflare Access blocked the request to SABnzbd");
+  }
+  if ([502, 503, 530].includes(res.status)) throw new Error("SABnzbd is offline or the tunnel is down");
+  const body = await res.json().catch(() => null);
+  if (!res.ok || !body) throw new Error(`SABnzbd error ${res.status}`);
+  if (body.status === false || body.error) throw new Error(`SABnzbd: ${body.error || "error"}`);
+  return body.queue || {};
+}
+
+const arrQueue = (env, base, key, app, extra) =>
+  base && key ? arr(env, base, key, app, `/queue?page=1&pageSize=200${extra}`).then((r) => (r && r.records) || []) : Promise.resolve([]);
+
+async function downloads(env, cors) {
+  const [tvQ, movieQ, sab] = await Promise.allSettled([
+    arrQueue(env, env.SONARR_URL, env.SONARR_API_KEY, "Sonarr", "&includeEpisode=true"),
+    arrQueue(env, env.RADARR_URL, env.RADARR_API_KEY, "Radarr", ""),
+    sabQueue(env),
+  ]);
+  const errors = [tvQ, movieQ, sab].filter((r) => r.status === "rejected").map((r) => r.reason.message);
+  const q = sab.status === "fulfilled" ? sab.value : null;
+
+  // SAB slots by nzo_id (Sonarr/Radarr's downloadId)
+  const slots = new Map();
+  for (const s of (q && q.slots) || []) slots.set(String(s.nzo_id || "").toLowerCase(), s);
+
+  const item = (r, extra) => {
+    const slot = slots.get(String(r.downloadId || "").toLowerCase());
+    const size = r.size || 0, left = r.sizeleft || 0;
+    let status = String(r.status || "").toLowerCase();                 // downloading, queued, paused, completed, failed, warning…
+    const tracked = String(r.trackedDownloadState || "").toLowerCase(); // downloading, importPending, importing, failedPending…
+    if (tracked.startsWith("import")) status = "importing";
+    else if (tracked.startsWith("fail")) status = "failed";
+    if (slot) status = /paused/i.test(slot.status) ? "paused" : /queued/i.test(slot.status) ? "queued" : "downloading";
+    const pct = slot ? Number(slot.percentage) : size ? ((size - left) / size) * 100 : 0;
+    return {
+      ...extra,
+      status,
+      percent: Math.max(0, Math.min(100, Math.round(pct * 10) / 10)),
+      sizeMB: Math.round(slot ? Number(slot.mb) : size / 1048576),
+      leftMB: Math.round(slot ? Number(slot.mbleft) : left / 1048576),
+      secondsLeft: status === "downloading" ? toSeconds(slot ? slot.timeleft : r.timeleft) : null,
+      warning: status === "failed" || r.trackedDownloadStatus === "warning"
+        ? ((r.statusMessages || [])[0] || {}).messages?.[0] || r.errorMessage || "" : "",
+    };
+  };
+
+  const items = [];
+  if (tvQ.status === "fulfilled") {
+    for (const r of tvQ.value) {
+      const ep = r.episode || {};
+      items.push(item(r, { type: "tv", seriesId: r.seriesId, episodeId: r.episodeId, season: ep.seasonNumber, episode: ep.episodeNumber }));
+    }
+  }
+  if (movieQ.status === "fulfilled") {
+    for (const r of movieQ.value) items.push(item(r, { type: "movie", movieId: r.movieId }));
+  }
+
+  return json({
+    items,
+    sab: q ? {
+      paused: Boolean(q.paused) || /paused/i.test(q.status || ""),
+      speedKBs: Math.round(Number(q.kbpersec) || 0),
+      secondsLeft: toSeconds(q.timeleft),
+    } : null,
+    errors,
+  }, 200, cors);
 }

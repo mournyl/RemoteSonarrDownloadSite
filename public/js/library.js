@@ -4,9 +4,11 @@
 //   - a badge on any TV, anime or movie card that's on your server
 //   - library info at the top of a show's or movie's detail popup
 //   - an "Add to My Server" button for shows (720p) and movies (1080p) you don't have yet
+//   - every episode of a show (season by season) in its popup
+//   - live download progress (percent, time left) on cards and in popups
 
-const library = { byTmdb: new Map(), byTitle: new Map(), shows: [], error: "", loaded: false, pending: [] };
-const movieLib = { byTmdb: new Map(), movies: [], error: "" };
+const library = { byTmdb: new Map(), byTitle: new Map(), byId: new Map(), shows: [], error: "", loaded: false, pending: [] };
+const movieLib = { byTmdb: new Map(), byId: new Map(), movies: [], error: "" };
 
 const libKey = (title, year) =>
   `${String(title || "").toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, " ").trim()}|${year || ""}`;
@@ -15,27 +17,33 @@ function indexLibrary(shows) {
   library.shows = shows || [];
   library.byTmdb.clear();
   library.byTitle.clear();
+  library.byId.clear();
   for (const s of library.shows) {
+    if (s.id) library.byId.set(s.id, s);
     if (s.tmdbId) library.byTmdb.set(s.tmdbId, s);
     library.byTitle.set(libKey(s.title, s.year), s);
   }
 }
 
-async function fetchLibrary() {
-  const res = await fetch(`${API_BASE}/api/library`);
+async function fetchLibrary(fresh) {
+  const res = await fetch(`${API_BASE}/api/library${fresh ? "?fresh=1" : ""}`);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Library error ${res.status}`);
   indexLibrary(data.shows);
   library.error = "";
 }
 
-async function fetchMovies() {
-  const res = await fetch(`${API_BASE}/api/movies`);
+async function fetchMovies(fresh) {
+  const res = await fetch(`${API_BASE}/api/movies${fresh ? "?fresh=1" : ""}`);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Movie library error ${res.status}`);
   movieLib.movies = data.movies || [];
   movieLib.byTmdb.clear();
-  for (const m of movieLib.movies) if (m.tmdbId) movieLib.byTmdb.set(m.tmdbId, m);
+  movieLib.byId.clear();
+  for (const m of movieLib.movies) {
+    if (m.tmdbId) movieLib.byTmdb.set(m.tmdbId, m);
+    if (m.id) movieLib.byId.set(m.id, m);
+  }
   movieLib.error = "";
 }
 
@@ -77,6 +85,13 @@ function movieStatus(m) {
   return { text: m.monitored ? "Wanted" : "In library", cls: "none", tip: "Not downloaded yet" };
 }
 
+function setBadge(badge, type, info) {
+  const { text, cls, tip } = type === "movie" ? movieStatus(info) : libraryStatus(info);
+  badge.className = `lib-badge ${cls}`;
+  badge.textContent = text;
+  badge.title = tip;
+}
+
 // Which kind of item a card is: "tv" or "movie"
 const itemType = (item) => item.__type || (state.type === "server" ? "tv" : state.type);
 
@@ -90,12 +105,13 @@ function libraryBadge(el, item) {
   }
   const info = type === "movie" ? item.__movie || movieMatch(item) : item.__library || libraryMatch(item);
   if (!info || el.querySelector(".lib-badge")) return;
-  const { text, cls, tip } = type === "movie" ? movieStatus(info) : libraryStatus(info);
   const badge = document.createElement("span");
-  badge.className = `lib-badge ${cls}`;
-  badge.textContent = text;
-  badge.title = tip;
   (el.querySelector(".poster") || el).append(badge);
+  setBadge(badge, type, info);
+  if (info.id) {
+    el.dataset.dl = `${type}:${info.id}`; // live download progress (see Downloads below)
+    showDownload(el);
+  }
   if (item.id < 0) { // My Server entry with no TMDB match: nothing to open
     el.onclick = null;
     el.style.cursor = "default";
@@ -181,14 +197,16 @@ function placePanel(box) {
   if (hero) hero.after(box); else body.prepend(box);
 }
 
-function libraryPanel(parts, pct) {
+function libraryPanel(parts, pct, dlKey) {
   const box = document.createElement("div");
   box.className = "lib-detail";
+  if (dlKey) box.dataset.dl = dlKey;
   box.innerHTML = `
     <div class="lib-detail-head"><span class="lib-dot"></span>In your library</div>
     <div class="lib-detail-meta">${parts.filter(Boolean).map(esc).join(" · ")}</div>
     <div class="lib-bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>`;
   placePanel(box);
+  if (dlKey) showDownload(box);
 }
 
 function showLibraryInfo(s) {
@@ -201,7 +219,8 @@ function showLibraryInfo(s) {
     s.status ? s.status[0].toUpperCase() + s.status.slice(1) : "",
     next ? `Next episode ${next}` : "",
     s.monitored ? "" : "Not monitored",
-  ], s.aired ? Math.min(100, Math.round((s.have / s.aired) * 100)) : 0);
+  ], s.aired ? Math.min(100, Math.round((s.have / s.aired) * 100)) : 0, s.id && `tv:${s.id}`);
+  if (s.id) showEpisodes(s, body.__libToken);
 }
 
 function showMovieInfo(m) {
@@ -210,6 +229,7 @@ function showMovieInfo(m) {
       ? ["Downloaded", m.quality, m.sizeGB ? `${m.sizeGB} GB` : ""]
       : [m.available ? (m.monitored ? "Not downloaded yet · Radarr is watching for it" : "Not downloaded") : "Not released yet · Radarr will grab it when it's out"],
     m.hasFile ? 100 : 0,
+    m.id && `movie:${m.id}`,
   );
 }
 
@@ -256,7 +276,10 @@ function showAddButton(type, d, token) {
       box.querySelector(".lib-detail-meta").hidden = true;
       box.querySelector(".lib-detail-head").innerHTML = `<span class="lib-dot"></span>${data.status === "exists" ? "Already on your server" : "Added to your server"}`;
       say(data.message || "Added.", "ok");
-      if (data.status === "added") (type === "tv" ? fetchLibrary : fetchMovies)().catch(() => {}); // shows up in My Server
+      if (data.status === "added") {
+        (type === "tv" ? fetchLibrary : fetchMovies)().catch(() => {}); // shows up in My Server
+        pollDownloadsSoon();                                            // its download shows up shortly
+      }
     } catch (err) {
       if (body.__libToken !== token) return;
       say(err.message, "err");
@@ -265,3 +288,193 @@ function showAddButton(type, d, token) {
     }
   });
 }
+
+// ---------- Episodes (in a show's popup) ----------
+const shortDate = (iso) => iso ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "TBA";
+
+async function showEpisodes(s, token, box) {
+  if (!box) {
+    box = document.createElement("div");
+    box.className = "section eps";
+    box.dataset.series = s.id;
+    box.innerHTML = `<h3>Episodes</h3><p class="eps-msg">Loading episodes…</p>`;
+    const overview = body.querySelector(".section");
+    if (overview) overview.after(box); else body.append(box);
+  }
+  const keepOpen = new Set([...box.querySelectorAll(".season[open]")].map((d) => d.dataset.season));
+
+  let eps;
+  try {
+    const res = await fetch(`${API_BASE}/api/episodes?series=${s.id}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+    eps = data.episodes || [];
+  } catch (e) {
+    if (body.__libToken === token) box.querySelector(".eps-msg").textContent = "Couldn't load episodes: " + e.message;
+    return;
+  }
+  if (body.__libToken !== token) return;
+  if (!eps.length) { box.querySelector(".eps-msg").textContent = "Sonarr has no episodes for this show yet."; return; }
+
+  const now = Date.now();
+  const aired = (e) => e.airDate && new Date(e.airDate).getTime() <= now;
+  const seasons = new Map();
+  for (const e of eps) {
+    if (!seasons.has(e.season)) seasons.set(e.season, []);
+    seasons.get(e.season).push(e);
+  }
+  // Regular seasons newest first, Specials (season 0) last
+  const order = [...seasons.keys()].sort((a, b) => (a === 0) - (b === 0) || b - a);
+  // Open the newest season that has aired episodes
+  const openSeason = order.find((n) => n !== 0 && seasons.get(n).some(aired)) ?? order[0];
+  const isOpen = (n) => (keepOpen.size ? keepOpen.has(String(n)) : n === openSeason);
+
+  box.innerHTML = `<h3>Episodes</h3>` + order.map((n) => {
+    const list = seasons.get(n);
+    const airedEps = list.filter(aired);
+    const have = list.filter((e) => e.hasFile).length;
+    return `
+      <details class="season" data-season="${n}"${isOpen(n) ? " open" : ""}>
+        <summary>${n === 0 ? "Specials" : `Season ${n}`}<span>${have}/${airedEps.length || list.length}</span></summary>
+        <ol>${list.map((e) => `
+          <li class="ep" data-ep="${e.id}" data-state="${e.hasFile ? "have" : !aired(e) ? "future" : e.monitored ? "missing" : "skip"}"
+              data-quality="${esc(e.quality)}" data-air="${esc(e.airDate)}">
+            <span class="ep-n">${e.number}</span>
+            <span class="ep-t">${esc(e.title || "TBA")}</span>
+            <span class="ep-d">${shortDate(e.airDate)}</span>
+            <span class="ep-s"></span>
+          </li>`).join("")}
+        </ol>
+      </details>`;
+  }).join("");
+  box.querySelectorAll(".ep").forEach(showEpisodeState);
+}
+
+function showEpisodeState(li) {
+  const el = li.querySelector(".ep-s");
+  const d = downloads.byEpisode.get(Number(li.dataset.ep));
+  li.classList.toggle("dl", Boolean(d));
+  if (d) { el.textContent = dlText(d, true); return; }
+  const st = li.dataset.state;
+  el.textContent = st === "have" ? `✓ ${li.dataset.quality || "Downloaded"}`
+    : st === "future" ? (li.dataset.air ? "Upcoming" : "TBA")
+    : st === "missing" ? "Missing" : "Not monitored";
+}
+
+// ---------- Downloads (Sonarr/Radarr queues + live SABnzbd) ----------
+const downloads = { byKey: new Map(), byEpisode: new Map(), sab: null, timer: 0, busy: false };
+
+function fmtLeft(sec) {
+  if (sec == null) return "";
+  if (sec < 60) return "<1m left";
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  return h ? `${h}h ${m}m left` : `${m}m left`;
+}
+
+function dlText(d, long) {
+  if (d.status === "importing") return "Importing…";
+  if (d.status === "failed") return "Download failed";
+  if (d.status === "queued") return "Queued";
+  const pct = `${Math.floor(d.percent)}%`;
+  if (d.status === "paused") return `Paused · ${pct}`;
+  const parts = [`⬇ ${pct}`, fmtLeft(d.secondsLeft)];
+  if (long && d.count > 1) parts.unshift(`${d.count} episodes`);
+  return parts.filter(Boolean).join(" · ");
+}
+
+// Cards and popup panels carry data-dl="tv:<sonarr id>" or "movie:<radarr id>"
+function showDownload(el) {
+  const d = downloads.byKey.get(el.dataset.dl);
+  const isCard = el.classList.contains("card");
+  const host = isCard ? el.querySelector(".poster") || el : el;
+  let box = host.querySelector(":scope > .dl");
+  if (!d) { if (box) box.remove(); return; }
+  if (!box) {
+    box = document.createElement("div");
+    box.className = isCard ? "dl dl-card" : "dl dl-panel";
+    box.innerHTML = `<div class="dl-text"></div><div class="dl-bar"><span></span></div>`;
+    host.append(box);
+  }
+  box.dataset.status = d.status;
+  let text = dlText(d, !isCard);
+  if (!isCard && d.status === "downloading" && downloads.sab && downloads.sab.speedKBs) {
+    text += ` · ${(downloads.sab.speedKBs / 1024).toFixed(1)} MB/s`;
+  }
+  if (!isCard && d.warning) text += ` — ${d.warning}`;
+  box.querySelector(".dl-text").textContent = text;
+  box.querySelector(".dl-bar span").style.width = `${d.status === "importing" ? 100 : d.percent}%`;
+}
+
+async function pollDownloads() {
+  clearTimeout(downloads.timer);
+  if (downloads.busy) return;
+  if (document.hidden) { downloads.timer = setTimeout(pollDownloads, 30000); return; }
+  downloads.busy = true;
+  let active = false;
+  try {
+    await serverReady;
+    if (!server.tv && !server.movie) return;
+    const res = await fetch(`${API_BASE}/api/downloads`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const before = new Set(downloads.byKey.keys());
+
+    // Combine episodes of the same show into one entry
+    const byKey = new Map(), byEpisode = new Map();
+    for (const it of data.items || []) {
+      const key = it.type === "tv" ? `tv:${it.seriesId}` : `movie:${it.movieId}`;
+      if (it.type === "tv" && it.episodeId) byEpisode.set(it.episodeId, it);
+      const a = byKey.get(key) || { status: "", count: 0, sizeMB: 0, doneMB: 0, secondsLeft: null, warning: "" };
+      a.count += 1;
+      a.sizeMB += it.sizeMB || 0;
+      a.doneMB += ((it.sizeMB || 0) * (it.percent || 0)) / 100;
+      if (it.secondsLeft != null) a.secondsLeft = Math.max(a.secondsLeft || 0, it.secondsLeft);
+      a.warning = a.warning || it.warning;
+      const rank = ["downloading", "importing", "paused", "queued", "failed"];
+      if (!a.status || rank.indexOf(it.status) < rank.indexOf(a.status)) a.status = it.status;
+      a.percent = a.sizeMB ? (a.doneMB / a.sizeMB) * 100 : it.percent || 0;
+      byKey.set(key, a);
+    }
+    downloads.byKey = byKey;
+    downloads.byEpisode = byEpisode;
+    downloads.sab = data.sab;
+    active = byKey.size > 0;
+
+    document.querySelectorAll("[data-dl]").forEach(showDownload);
+    document.querySelectorAll(".ep[data-ep]").forEach(showEpisodeState);
+
+    // Something finished: reload the library so badges and episode lists catch up
+    const finished = [...before].filter((k) => !byKey.has(k));
+    if (finished.length) refreshLibrary(finished);
+  } catch {
+    // ignore; try again next time
+  } finally {
+    downloads.busy = false;
+    downloads.timer = setTimeout(pollDownloads, active ? 5000 : 30000);
+  }
+}
+
+// Check again in a few seconds (after adding something)
+function pollDownloadsSoon() {
+  clearTimeout(downloads.timer);
+  downloads.timer = setTimeout(pollDownloads, 4000);
+}
+
+async function refreshLibrary(finished = []) {
+  await Promise.all([fetchLibrary(true).catch(() => {}), fetchMovies(true).catch(() => {})]);
+  // Reload the episode list if that show's popup is open
+  for (const key of finished) {
+    const box = body.querySelector(`.eps[data-series="${key.split(":")[1]}"]`);
+    const s = key.startsWith("tv:") && library.byId.get(Number(key.split(":")[1]));
+    if (box && s) showEpisodes(s, body.__libToken, box);
+  }
+  document.querySelectorAll(".card[data-dl]").forEach((el) => {
+    const [type, id] = el.dataset.dl.split(":");
+    const info = (type === "movie" ? movieLib : library).byId.get(Number(id));
+    const badge = el.querySelector(".lib-badge");
+    if (info && badge) setBadge(badge, type, info);
+  });
+}
+
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pollDownloads(); });
+libraryReady.then(pollDownloads);

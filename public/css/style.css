@@ -227,3 +227,41 @@ footer { text-align: center; color: var(--faint); font-size: 11px; padding: 24px
 .lib-section { grid-column: 1 / -1; margin: 18px 0 -14px; padding-bottom: 8px; font-size: 18px; font-weight: 600; border-bottom: 1px solid var(--chip); }
 .lib-section:first-child { margin-top: 0; }
 .lib-section span { margin-left: 6px; font-size: 13px; font-weight: 400; color: var(--muted); }
+
+/* ---------- Download progress ---------- */
+.dl-card { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 8px 0; background: linear-gradient(transparent, rgba(0,0,0,.85)); }
+.dl-card .dl-text { font-size: 11px; font-weight: 600; color: #fff; padding-bottom: 5px; text-align: left; }
+.dl-card .dl-bar { height: 3px; background: rgba(255,255,255,.18); }
+.dl-panel { margin-top: 10px; }
+.dl-panel .dl-text { font-size: 12px; color: var(--text); margin-bottom: 6px; }
+.dl-panel .dl-bar { height: 3px; border-radius: 2px; background: var(--raise); overflow: hidden; }
+.dl-bar span { display: block; height: 100%; background: #4a90d9; transition: width .6s ease; }
+.dl[data-status="paused"] .dl-bar span, .dl[data-status="queued"] .dl-bar span { background: var(--muted); }
+.dl[data-status="importing"] .dl-bar span { background: #3fae6a; }
+.dl[data-status="failed"] .dl-bar span { background: #e07a7a; }
+
+/* ---------- Episode list ---------- */
+.eps .eps-msg { font-size: 13px; color: var(--muted); }
+.season { border-top: 1px solid var(--chip); }
+.season:last-child { border-bottom: 1px solid var(--chip); }
+.season summary { display: flex; justify-content: space-between; padding: 10px 2px; cursor: pointer; font-weight: 600; list-style: none; }
+.season summary::-webkit-details-marker { display: none; }
+.season summary::before { content: "▸"; margin-right: 8px; color: var(--muted); }
+.season[open] summary::before { content: "▾"; }
+.season summary span { margin-left: auto; font-weight: 400; font-size: 12px; color: var(--muted); }
+.season ol { list-style: none; padding-bottom: 8px; }
+.ep { display: grid; grid-template-columns: 28px 1fr auto auto; gap: 12px; align-items: baseline; padding: 6px 2px; font-size: 13px; }
+.ep + .ep { border-top: 1px solid rgba(255,255,255,.04); }
+.ep-n { color: var(--faint); text-align: right; }
+.ep-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ep-d { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.ep-s { font-size: 12px; white-space: nowrap; min-width: 92px; text-align: right; }
+.ep[data-state="have"] .ep-s { color: #6fcf8f; }
+.ep[data-state="missing"] .ep-s { color: #e0a24a; }
+.ep[data-state="future"] .ep-s, .ep[data-state="skip"] .ep-s { color: var(--faint); }
+.ep[data-state="future"] .ep-t { color: var(--muted); }
+.ep.dl .ep-s { color: #7fb3ea; }
+@media (max-width: 600px) {
+  .ep { grid-template-columns: 24px 1fr auto; }
+  .ep-d { display: none; }
+}
